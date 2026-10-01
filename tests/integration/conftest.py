@@ -102,10 +102,47 @@ async def http(engine, redis_client):
                 await session.rollback()
                 raise
 
+    from unittest.mock import patch
+
+    from app.api import dead_letter, mocks, monitoring, notifications
+
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_redis] = lambda: redis_client
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        yield client
+    app.dependency_overrides[notifications.redis_client] = lambda: redis_client
+    with (
+        patch.object(mocks, "get_redis", return_value=redis_client),
+        patch.object(dead_letter, "get_redis", return_value=redis_client),
+        patch.object(monitoring, "get_redis", return_value=redis_client),
+    ):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            yield client
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def make_worker(engine, redis_client, monkeypatch):
+    from app.mocks.third_party_mock import MOCKS
+    from app.workers import base_worker
+    from app.workers.android_worker import AndroidWorker
+    from app.workers.email_worker import EmailWorker
+    from app.workers.ios_worker import IOSWorker
+    from app.workers.sms_worker import SMSWorker
+
+    classes = {"ios": IOSWorker, "android": AndroidWorker, "sms": SMSWorker, "email": EmailWorker}
+    # 스트림이 비었을 때 poll_once가 1초씩 막히지 않게 한다
+    monkeypatch.setattr(base_worker, "BLOCK_MS", 10)
+    for mock in MOCKS.values():
+        mock.reset()
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def make(channel: str, clock=None):
+        kwargs = {"clock": clock} if clock else {}
+        worker = classes[channel](redis_client=redis_client, session_factory=factory, **kwargs)
+        await worker.setup()
+        return worker
+
+    yield make
+    for mock in MOCKS.values():
+        mock.reset()
