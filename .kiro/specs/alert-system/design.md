@@ -303,10 +303,13 @@ while True:
 | `android_stream` | Android 알림 전송 큐 |
 | `sms_stream` | SMS 알림 전송 큐 |
 | `email_stream` | 이메일 알림 전송 큐 |
-| `retry_stream` | 재시도 대기 큐 (채널 구분 없음, Worker가 채널 필드로 라우팅) |
+| `retry_stream` | 재시도 대기 큐 (채널 구분 없음, 모든 채널 Worker가 읽고 `channel` 필드가 다르면 ack 후 건너뜀) |
 | `dead_letter_stream` | 최종 실패 알림 보관 |
 
-각 Stream은 Consumer Group (`notification_consumers`)을 통해 Worker가 메시지를 병렬 처리합니다.
+채널 Stream은 Consumer Group (`notification_consumers`)을 통해 Worker가 메시지를 병렬 처리합니다. `retry_stream`은 채널별 Worker가 각자 Consumer Group `notification_consumers_<channel>_retry`를 사용하므로 4개 그룹이 같은 항목을 읽습니다.
+
+- `next_retry_after`(Unix timestamp) 도래 전의 재시도 메시지는 처리하지 않고 pending으로 남겨 두며, Worker가 매 poll마다 pending을 다시 확인합니다.
+- `retry_stream`은 `XDEL`을 쓰지 않습니다. 4개 그룹이 같은 항목을 읽기 때문에 재시도를 enqueue한 직후 `XTRIM MINID`로 1시간이 지난 항목만 정리합니다.
 
 ### Cache (Redis)
 
@@ -512,15 +515,15 @@ title           = "새 메시지"
 body            = "홍길동님이 메시지를 보냈습니다."
 retry_count     = "0"
 next_retry_after = ""          # retry_stream에서만 사용 (Unix timestamp)
-enqueued_at     = "2024-01-15T10:00:00Z"
+enqueued_at     = "2024-01-15T10:00:00+00:00"
 ```
 
-값은 모두 문자열로 저장됩니다. `title`이 없으면 빈 문자열이고, `enqueued_at`은 UTC ISO 8601 형식입니다.
+값은 모두 문자열로 저장됩니다. `title`이 없으면 빈 문자열이고, `enqueued_at`은 UTC ISO 8601 형식(`+00:00` 표기)입니다.
 
 ```
 # Dead Letter Stream 메시지 필드 (XADD dead_letter_stream * ...)
 notification_id = "550e8400-e29b-41d4-a716-446655440001"  # 없으면 event_id로 대체해 조회
-failed_at       = "2024-01-15T10:00:30Z"                    # 최종 실패 시각, ISO 8601 UTC
+failed_at       = "2024-01-15T10:00:30+00:00"               # 최종 실패 시각, ISO 8601 UTC
 failure_reason  = "timeout"
 retry_count     = "3"
 ```
