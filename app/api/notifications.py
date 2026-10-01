@@ -34,10 +34,6 @@ router = APIRouter()
 QUEUE_TIMEOUT_SECONDS = 3
 
 
-def redis_client() -> aioredis.Redis:
-    return get_redis()
-
-
 def _error(status: int, code: str, message: str, details: list[dict] | None = None, **kwargs) -> HTTPException:
     detail = {"code": code, "message": message, "details": details or []}
     return HTTPException(status_code=status, detail=detail, **kwargs)
@@ -120,16 +116,8 @@ async def _render(req: NotificationRequest, db: AsyncSession, client: aioredis.R
     return rendered["title"], rendered["body"]
 
 
-@router.post("/notifications", response_model=NotificationAccepted, status_code=202)
-async def create_notification(
-    request: Request,
-    response: Response,
-    app: App = Depends(get_current_app),
-    db: AsyncSession = Depends(get_db),
-    client: aioredis.Redis = Depends(redis_client),
-):
-    payload = await _json_object(request)
-
+async def _precheck(payload: dict, db: AsyncSession, client: aioredis.Redis) -> NotificationRequest:
+    # 순서가 의미를 가진다: Rate Limit(429) → 중복(409) → 필드 검증(400).
     recipient, channel = payload.get("recipient_id"), payload.get("channel")
     if isinstance(recipient, str) and recipient and isinstance(channel, str) and channel in CHANNEL_STREAMS:
         if not await check_rate_limit(recipient, channel, db, client):
@@ -144,7 +132,20 @@ async def create_notification(
         if duplicate:
             raise _error(409, "DUPLICATE_EVENT", f"이미 처리된 event_id입니다: {event_id}")
 
-    req = _validate(payload)
+    return _validate(payload)
+
+
+@router.post("/notifications", response_model=NotificationAccepted, status_code=202)
+async def create_notification(
+    request: Request,
+    response: Response,
+    app: App = Depends(get_current_app),
+    db: AsyncSession = Depends(get_db),
+    client: aioredis.Redis = Depends(get_redis),
+):
+    payload = await _json_object(request)
+
+    req = await _precheck(payload, db, client)
     event_id = req.event_id or f"evt_{uuid.uuid4().hex}"
 
     with _db_guard():

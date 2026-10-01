@@ -50,11 +50,6 @@ async def init_consumer_group(
             raise
 
 
-async def init_all_consumer_groups(client: aioredis.Redis) -> None:
-    for stream in ALL_STREAMS:
-        await init_consumer_group(client, stream)
-
-
 async def xadd_notification(
     client: aioredis.Redis, stream: str, fields: dict[str, Any]
 ) -> str:
@@ -100,10 +95,6 @@ async def set_cache(
     client: aioredis.Redis, key: str, value: Any, ttl_seconds: int
 ) -> None:
     await client.set(key, json.dumps(value), ex=ttl_seconds)
-
-
-async def delete_cache(client: aioredis.Redis, key: str) -> int:
-    return await client.delete(key)
 
 
 async def incr_with_ttl(client: aioredis.Redis, key: str, ttl_seconds: int) -> int:

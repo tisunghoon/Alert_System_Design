@@ -4,14 +4,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import fakeredis
 import httpx
-from fastapi import FastAPI
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from app.api import notifications
 from app.core.database import get_db
-from app.core.errors import register_exception_handlers
+from app.core.redis import get_redis
 from app.models import App
+from tests.support.http import make_client
 
 REGISTERED = App(id=uuid.uuid4(), app_key="valid-key", app_secret="valid-secret", name="svc", is_active=True)
 CHANNELS = ["ios", "android", "sms", "email"]
@@ -36,13 +36,9 @@ class FakeDB:
 
 
 async def post(body: dict) -> httpx.Response:
-    api = FastAPI()
-    register_exception_handlers(api)
-    api.include_router(notifications.router)
-    api.dependency_overrides[get_db] = lambda: FakeDB()
     redis = fakeredis.FakeAsyncRedis(decode_responses=True)
-    api.dependency_overrides[notifications.redis_client] = lambda: redis
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://test") as client:
+    overrides = {get_db: lambda: FakeDB(), get_redis: lambda: redis}
+    async with make_client(notifications.router, overrides=overrides) as client:
         return await client.post("/notifications", json=body)
 
 

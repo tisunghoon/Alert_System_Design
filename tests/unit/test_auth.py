@@ -1,13 +1,13 @@
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
 import pytest
-from fastapi import Depends, FastAPI
+from fastapi import APIRouter, Depends
 
 from app.core.database import get_db
 from app.models import App
 from app.services import auth
 from app.services.auth import authenticate_app, get_current_app
+from tests.support.http import make_client
 
 
 def make_db(app: App | None) -> AsyncMock:
@@ -56,15 +56,14 @@ async def test_max_length_credentials_accepted():
 
 @pytest.fixture
 def client_factory():
-    def build(app: App | None) -> httpx.AsyncClient:
-        api = FastAPI()
-        api.dependency_overrides[get_db] = lambda: make_db(app)
+    def build(app: App | None):
+        router = APIRouter()
 
-        @api.post("/protected")
+        @router.post("/protected")
         async def protected(current: App = Depends(get_current_app)):
             return {"name": current.name}
 
-        return httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://test")
+        return make_client(router, overrides={get_db: lambda: make_db(app)})
 
     return build
 

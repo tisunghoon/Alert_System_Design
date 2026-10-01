@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
+import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy import case, func, select, text
@@ -21,8 +22,7 @@ HEALTH_TIMEOUT_SECONDS = 3
 
 
 @router.get("/monitoring/queues")
-async def get_queues():
-    client = get_redis()
+async def get_queues(client: aioredis.Redis = Depends(get_redis)):
     sizes = await asyncio.gather(*(get_stream_length(client, s) for s in CHANNEL_STREAMS.values()))
     queues = []
     for (channel, stream), size in zip(CHANNEL_STREAMS.items(), sizes, strict=True):
@@ -69,12 +69,11 @@ async def _check_db(db: AsyncSession) -> None:
     await db.execute(text("SELECT 1"))
 
 
-async def _check_cache() -> None:
-    await get_redis().ping()
+async def _check_cache(client: aioredis.Redis) -> None:
+    await client.ping()
 
 
-async def _check_queue() -> None:
-    client = get_redis()
+async def _check_queue(client: aioredis.Redis) -> None:
     await asyncio.gather(*(get_stream_length(client, stream) for stream in ALL_STREAMS))
 
 
@@ -88,11 +87,11 @@ async def _status(name: str, check) -> str:
 
 
 @router.get("/health")
-async def health(db: AsyncSession = Depends(get_db)):
+async def health(db: AsyncSession = Depends(get_db), client: aioredis.Redis = Depends(get_redis)):
     db_status, cache_status, queue_status = await asyncio.gather(
         _status("database", _check_db(db)),
-        _status("cache", _check_cache()),
-        _status("message_queue", _check_queue()),
+        _status("cache", _check_cache(client)),
+        _status("message_queue", _check_queue(client)),
     )
     components = {"database": db_status, "cache": cache_status, "message_queue": queue_status}
     unhealthy = [name for name, status in components.items() if status != "healthy"]

@@ -20,13 +20,6 @@ async def test_group_init_is_idempotent(fake_redis):
     assert [g["name"] for g in groups] == [r.CONSUMER_GROUP]
 
 
-async def test_init_all_creates_every_stream(fake_redis):
-    await r.init_all_consumer_groups(fake_redis)
-    for stream in r.ALL_STREAMS:
-        assert await r.get_stream_length(fake_redis, stream) == 0
-        assert len(await fake_redis.xinfo_groups(stream)) == 1
-
-
 async def test_add_read_ack_length(fake_redis):
     await r.init_consumer_group(fake_redis, r.SMS_STREAM)
     msg_id = await r.xadd_notification(
@@ -66,7 +59,7 @@ async def test_cache_json_roundtrip_and_delete(fake_redis):
     assert await r.get_cache(fake_redis, "device:u1") == value
     assert 0 < await fake_redis.ttl("device:u1") <= 300
 
-    assert await r.delete_cache(fake_redis, "device:u1") == 1
+    assert await fake_redis.delete("device:u1") == 1
     assert await r.get_cache(fake_redis, "device:u1") is None
 
 

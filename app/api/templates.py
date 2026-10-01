@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.redis import delete_cache, get_redis
+from app.core.redis import get_redis
 from app.models import App
 from app.models.notification_template import NotificationTemplate
 from app.schemas.template import TemplateIn, TemplateOut, extract_placeholders
@@ -80,7 +80,7 @@ async def update_template(
     row.body = payload.body
     row.placeholders = extract_placeholders(payload.title, payload.body)
     await _commit(db)
-    await delete_cache(redis, f"template:{template_id}")
+    await redis.delete(f"template:{template_id}")
     return row
 
 
@@ -96,5 +96,5 @@ async def delete_template(
         raise HTTPException(409, f"활성 규칙 {row.ref_count}개가 이 템플릿을 참조하고 있어 삭제할 수 없습니다.")
     row.is_deleted = True
     await _commit(db)
-    await delete_cache(redis, f"template:{template_id}")
+    await redis.delete(f"template:{template_id}")
     return Response(status_code=204)
