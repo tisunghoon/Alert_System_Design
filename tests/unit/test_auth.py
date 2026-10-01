@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI
 
 from app.core.database import get_db
 from app.models import App
+from app.services import auth
 from app.services.auth import authenticate_app, get_current_app
 
 
@@ -126,3 +127,18 @@ async def test_dependency_rejects_missing_headers(client_factory, headers):
     async with client_factory(make_app()) as client:
         resp = await client.post("/protected", headers=headers)
     assert resp.status_code == 401
+
+
+async def test_secret_is_compared_with_compare_digest(monkeypatch):
+    calls = []
+    real = auth.hmac.compare_digest
+
+    def spy(a, b):
+        calls.append((a, b))
+        return real(a, b)
+
+    monkeypatch.setattr(auth.hmac, "compare_digest", spy)
+    assert await authenticate_app("key", "secret", make_db(make_app())) is not None
+    assert calls == [(b"secret", b"secret")]
+    assert await authenticate_app("key", "wrong", make_db(make_app())) is None
+    assert calls[-1] == (b"secret", b"wrong")
