@@ -245,7 +245,14 @@ def ordered_events(monkeypatch, sessions):
         sessions.events.append(f"xadd:{stream}")
         return await original_xadd(client, stream, fields)
 
+    original_xdel = base_worker.xdel_message
+
+    async def recording_xdel(client, stream, message_id):
+        sessions.events.append(f"xdel:{stream}")
+        return await original_xdel(client, stream, message_id)
+
     monkeypatch.setattr(base_worker, "xack_message", recording_ack)
+    monkeypatch.setattr(base_worker, "xdel_message", recording_xdel)
     monkeypatch.setattr(base_worker, "xadd_notification", recording_xadd)
     return sessions.events
 
@@ -256,7 +263,7 @@ async def test_xack_happens_after_delivered_commit(worker, redis_client, ordered
 
     await worker.poll_once()
 
-    assert ordered_events[-2:] == ["commit", "xack"]
+    assert ordered_events[-3:] == ["commit", "xack", f"xdel:{IOS_STREAM}"]
     assert ordered_events.count("xack") == 1
 
 
@@ -267,7 +274,7 @@ async def test_xack_happens_after_retry_enqueue_and_commit(worker, redis_client,
 
     await worker.poll_once()
 
-    assert ordered_events[-3:] == ["commit", f"xadd:{RETRY_STREAM}", "xack"]
+    assert ordered_events[-4:] == ["commit", f"xadd:{RETRY_STREAM}", "xack", f"xdel:{IOS_STREAM}"]
 
 
 async def test_xack_happens_after_dead_letter_commit(worker, redis_client, ordered_events):
@@ -277,7 +284,46 @@ async def test_xack_happens_after_dead_letter_commit(worker, redis_client, order
 
     await worker.poll_once()
 
-    assert ordered_events[-3:] == ["commit", f"xadd:{DEAD_LETTER_STREAM}", "xack"]
+    assert ordered_events[-4:] == ["commit", f"xadd:{DEAD_LETTER_STREAM}", "xack", f"xdel:{IOS_STREAM}"]
+
+
+async def test_processed_message_is_removed_from_channel_stream(worker, redis_client):
+    await xadd_notification(redis_client, IOS_STREAM, message())
+    assert await redis_client.xlen(IOS_STREAM) == 1
+
+    await worker.poll_once()
+
+    assert await redis_client.xlen(IOS_STREAM) == 0
+
+
+async def test_failed_message_is_removed_from_channel_stream_after_retry_enqueue(worker, redis_client):
+    await config_store.save_config(redis_client, "ios", success_rate=0)
+    await xadd_notification(redis_client, IOS_STREAM, message())
+
+    await worker.poll_once()
+
+    assert await redis_client.xlen(IOS_STREAM) == 0
+    assert await redis_client.xlen(RETRY_STREAM) == 1
+
+
+async def test_retry_stream_message_is_not_deleted(worker, redis_client, ordered_events):
+    await xadd_notification(redis_client, RETRY_STREAM, message(retry_count=1, next_retry_after=0))
+    ordered_events.clear()
+
+    await worker.poll_once()
+
+    assert "xack" in ordered_events
+    assert not any(e.startswith("xdel") for e in ordered_events)
+    assert await redis_client.xlen(RETRY_STREAM) == 1
+
+
+async def test_unprocessed_message_stays_in_channel_stream(worker, redis_client):
+    worker.stop()
+    await xadd_notification(redis_client, IOS_STREAM, message())
+
+    await worker.poll_once()
+
+    assert await redis_client.xlen(IOS_STREAM) == 1
 
 
 def test_default_consumer_name_is_stable_per_channel(redis_client, monkeypatch):
