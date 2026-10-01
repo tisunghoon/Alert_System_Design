@@ -52,7 +52,8 @@ async def get_template(
 ) -> dict:
     key = f"template:{template_id}"
     cached = await get_cache(client, key)
-    if cached is not None:
+    # name이 없는 항목은 이전 형식의 캐시이므로 miss로 취급한다.
+    if cached is not None and "name" in cached:
         return cached
 
     row = await session.get(NotificationTemplate, template_id)
@@ -61,6 +62,7 @@ async def get_template(
 
     template = {
         "id": str(row.id),
+        "name": row.name,
         "title": row.title,
         "body": row.body,
         "placeholders": row.placeholders,

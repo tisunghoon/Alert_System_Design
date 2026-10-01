@@ -1,3 +1,4 @@
+import json
 import uuid
 from unittest.mock import AsyncMock
 
@@ -106,3 +107,16 @@ async def test_deleted_template_raises_not_found_and_is_not_cached(redis_client)
     with pytest.raises(TemplateNotFoundError):
         await get_template(session, redis_client, template_id)
     assert await redis_client.exists(f"template:{template_id}") == 0
+
+
+async def test_cache_entry_without_name_is_treated_as_miss(redis_client):
+    template_id = uuid.uuid4()
+    legacy = {"id": str(template_id), "title": None, "body": "old", "placeholders": []}
+    await redis_client.set(f"template:{template_id}", json.dumps(legacy))
+    session = AsyncMock()
+    session.get.return_value = make_row(template_id)
+
+    template = await get_template(session, redis_client, template_id)
+
+    assert template["name"] == "order"
+    session.get.assert_awaited_once()
