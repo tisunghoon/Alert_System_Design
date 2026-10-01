@@ -25,7 +25,7 @@ async def get_queues():
     client = get_redis()
     sizes = await asyncio.gather(*(get_stream_length(client, s) for s in CHANNEL_STREAMS.values()))
     queues = []
-    for (channel, stream), size in zip(CHANNEL_STREAMS.items(), sizes):
+    for (channel, stream), size in zip(CHANNEL_STREAMS.items(), sizes, strict=True):
         if size > settings.QUEUE_ALERT_THRESHOLD:
             logger.warning(
                 "큐 크기가 임계값을 초과했습니다: channel=%s size=%d threshold=%d",
@@ -37,12 +37,10 @@ async def get_queues():
 
 @router.get("/monitoring/stats")
 async def get_stats(
-    start: datetime | None = Query(None),
-    end: datetime | None = Query(None),
+    start: datetime = Query(...),
+    end: datetime = Query(...),
     db: AsyncSession = Depends(get_db),
 ):
-    if start is None or end is None:
-        raise HTTPException(400, "start와 end 시간 범위는 필수입니다.")
     # naive 입력은 UTC로 간주해 aware 값과 비교할 때 TypeError가 나지 않게 한다
     start = start if start.tzinfo else start.replace(tzinfo=UTC)
     end = end if end.tzinfo else end.replace(tzinfo=UTC)

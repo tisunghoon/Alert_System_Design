@@ -4,8 +4,7 @@ from typing import Self
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.services.template_service import PLACEHOLDER_PATTERN
-
+PLACEHOLDER_PATTERN = re.compile(r"\{\{(\w+)\}\}")
 MAX_PLACEHOLDERS = 50
 _BRACES = r"\{\{.*?\}\}"
 

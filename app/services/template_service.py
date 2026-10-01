@@ -1,4 +1,3 @@
-import re
 import uuid
 
 import redis.asyncio as aioredis
@@ -6,9 +5,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.redis import get_cache, set_cache
 from app.models.notification_template import NotificationTemplate
+from app.schemas.template import PLACEHOLDER_PATTERN
 
 TEMPLATE_CACHE_TTL = 600
-PLACEHOLDER_PATTERN = re.compile(r"\{\{(\w+)\}\}")
 
 
 class TemplateVariableMismatchError(Exception):
@@ -47,25 +46,27 @@ def render_template(template: dict, variables: dict[str, str]) -> dict:
     }
 
 
-async def get_template(
-    session: AsyncSession, client: aioredis.Redis, template_id: uuid.UUID
-) -> dict:
-    key = f"template:{template_id}"
-    cached = await get_cache(client, key)
-    # name이 없는 항목은 이전 형식의 캐시이므로 miss로 취급한다.
-    if cached is not None and "name" in cached:
-        return cached
-
+async def load_template(session: AsyncSession, template_id: uuid.UUID) -> dict:
     row = await session.get(NotificationTemplate, template_id)
     if row is None or row.is_deleted:
         raise TemplateNotFoundError(template_id)
-
-    template = {
+    return {
         "id": str(row.id),
         "name": row.name,
         "title": row.title,
         "body": row.body,
         "placeholders": row.placeholders,
     }
+
+
+async def get_template(
+    session: AsyncSession, client: aioredis.Redis, template_id: uuid.UUID
+) -> dict:
+    key = f"template:{template_id}"
+    cached = await get_cache(client, key)
+    if cached is not None:
+        return cached
+
+    template = await load_template(session, template_id)
     await set_cache(client, key, template, TEMPLATE_CACHE_TTL)
     return template
