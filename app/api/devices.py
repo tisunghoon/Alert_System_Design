@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.redis import get_cache, get_redis, set_cache
+from app.core.redis import get_cache, get_redis, invalidate_cache, set_cache
 from app.models import App, Device
 from app.schemas.device import DeviceIn, DeviceOut
 from app.services.auth import get_current_app
@@ -51,7 +51,7 @@ async def register_device(
     except IntegrityError:
         await db.rollback()
         raise HTTPException(409, "이미 등록된 단말입니다.") from None
-    await redis.delete(_cache_key(user_id))
+    await invalidate_cache(redis, _cache_key(user_id))
     return _to_dict(device)
 
 
@@ -92,5 +92,5 @@ async def delete_device(
         raise HTTPException(404, f"단말을 찾을 수 없습니다: {device_id}")
     await db.delete(device)
     await db.commit()
-    await redis.delete(_cache_key(user_id))
+    await invalidate_cache(redis, _cache_key(user_id))
     return Response(status_code=204)

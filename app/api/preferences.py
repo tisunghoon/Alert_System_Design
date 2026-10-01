@@ -5,7 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.redis import get_redis
+from app.core.redis import get_redis, invalidate_cache
 from app.models import App, UserPreference
 from app.schemas.preference import PreferenceUpdate
 from app.services.auth import get_current_app
@@ -51,5 +51,5 @@ async def update_preferences(
         # 동시 요청이 같은 행을 먼저 삽입한 경우: 롤백 후 한 번 더 시도하면 기존 행을 갱신한다.
         await db.rollback()
         await _upsert(db, user_id, payload.preferences)
-    await redis.delete(pref_cache_key(user_id))
+    await invalidate_cache(redis, pref_cache_key(user_id))
     return await get_preferences(db, redis, user_id)
