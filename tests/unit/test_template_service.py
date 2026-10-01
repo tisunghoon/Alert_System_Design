@@ -1,7 +1,6 @@
 import uuid
 from unittest.mock import AsyncMock
 
-import fakeredis.aioredis
 import pytest
 
 from app.models.notification_template import NotificationTemplate
@@ -24,11 +23,6 @@ def make_row(template_id, *, is_deleted=False):
         placeholders=["{{name}}", "{{item}}"],
         is_deleted=is_deleted,
     )
-
-
-@pytest.fixture
-def redis_client():
-    return fakeredis.aioredis.FakeRedis(decode_responses=True)
 
 
 def test_render_replaces_title_and_body():
@@ -67,42 +61,42 @@ def test_missing_and_extra_reported_together():
     assert exc.value.extra == ["coupon"]
 
 
-async def test_get_template_miss_reads_db_and_caches(redis_client):
+async def test_get_template_miss_reads_db_and_caches(fake_redis):
     template_id = uuid.uuid4()
     session = AsyncMock()
     session.get.return_value = make_row(template_id)
 
-    template = await get_template(session, redis_client, template_id)
+    template = await get_template(session, fake_redis, template_id)
 
     assert template["body"] == "{{item}}"
-    assert await redis_client.ttl(f"template:{template_id}") == pytest.approx(600, abs=2)
+    assert await fake_redis.ttl(f"template:{template_id}") == pytest.approx(600, abs=2)
 
 
-async def test_get_template_hit_skips_db(redis_client):
+async def test_get_template_hit_skips_db(fake_redis):
     template_id = uuid.uuid4()
     session = AsyncMock()
     session.get.return_value = make_row(template_id)
 
-    first = await get_template(session, redis_client, template_id)
-    second = await get_template(session, redis_client, template_id)
+    first = await get_template(session, fake_redis, template_id)
+    second = await get_template(session, fake_redis, template_id)
 
     assert first == second
     assert session.get.await_count == 1
 
 
-async def test_unknown_template_raises_not_found(redis_client):
+async def test_unknown_template_raises_not_found(fake_redis):
     session = AsyncMock()
     session.get.return_value = None
 
     with pytest.raises(TemplateNotFoundError):
-        await get_template(session, redis_client, uuid.uuid4())
+        await get_template(session, fake_redis, uuid.uuid4())
 
 
-async def test_deleted_template_raises_not_found_and_is_not_cached(redis_client):
+async def test_deleted_template_raises_not_found_and_is_not_cached(fake_redis):
     template_id = uuid.uuid4()
     session = AsyncMock()
     session.get.return_value = make_row(template_id, is_deleted=True)
 
     with pytest.raises(TemplateNotFoundError):
-        await get_template(session, redis_client, template_id)
-    assert await redis_client.exists(f"template:{template_id}") == 0
+        await get_template(session, fake_redis, template_id)
+    assert await fake_redis.exists(f"template:{template_id}") == 0

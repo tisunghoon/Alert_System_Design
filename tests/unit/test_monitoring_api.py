@@ -3,7 +3,6 @@ import logging
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import fakeredis
 import httpx
 import pytest
 from sqlalchemy.dialects import postgresql
@@ -15,11 +14,9 @@ from app.main import app
 
 
 @pytest.fixture
-async def redis_client():
-    c = fakeredis.FakeAsyncRedis(decode_responses=True)
-    with patch.object(monitoring, "get_redis", return_value=c):
-        yield c
-    await c.aclose()
+async def redis_client(fake_redis):
+    with patch.object(monitoring, "get_redis", return_value=fake_redis):
+        yield fake_redis
 
 
 @pytest.fixture
