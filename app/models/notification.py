@@ -57,5 +57,8 @@ class Notification(Base):
     )
 
     history: Mapped[list["NotificationStatusHistory"]] = relationship(
-        back_populates="notification", cascade="all, delete-orphan", passive_deletes=True
+        back_populates="notification",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="NotificationStatusHistory.changed_at",
     )
