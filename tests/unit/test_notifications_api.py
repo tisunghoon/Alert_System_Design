@@ -373,3 +373,16 @@ async def test_post_non_object_body_with_header_auth_returns_400(client, db, con
     assert resp.status_code == 400
     assert resp.json()["error"]["details"][0]["field"] == "body"
     assert db.added == []
+
+
+async def test_post_commits_log_before_enqueueing(client, db, monkeypatch):
+    calls = []
+    db.commit.side_effect = lambda: calls.append("commit")
+
+    async def xadd(client, stream, fields):
+        calls.append("xadd")
+
+    monkeypatch.setattr(notifications, "xadd_notification", xadd)
+
+    assert (await client.post("/notifications", json=payload())).status_code == 202
+    assert calls == ["commit", "xadd"]

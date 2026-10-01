@@ -1,6 +1,7 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
+import fakeredis
 import httpx
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -182,3 +183,26 @@ async def test_unauthenticated_request_returns_401_in_standard_format():
 
 def test_extra_credential_fields_are_ignored_by_schema():
     TemplateIn(**VALID, app_key="k", app_secret="s")
+
+
+@pytest.fixture
+def redis_down():
+    app.dependency_overrides[get_redis] = lambda: fakeredis.FakeAsyncRedis(connected=False, decode_responses=True)
+
+
+async def test_read_falls_back_to_db_when_redis_is_down(client, db, redis_down):
+    row = make_row()
+    db.get.return_value = row
+
+    res = await client.get(f"/templates/{row.id}")
+
+    assert res.status_code == 200
+    assert res.json()["name"] == "order"
+
+
+async def test_read_missing_template_is_404_when_redis_is_down(client, db, redis_down):
+    db.get.return_value = None
+
+    res = await client.get(f"/templates/{uuid.uuid4()}")
+
+    assert res.status_code == 404
