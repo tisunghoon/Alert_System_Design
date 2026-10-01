@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-Channel = Literal["ios", "android", "sms", "email"]
+from app.schemas.device import Channel
 
 
 class NotificationRequest(BaseModel):

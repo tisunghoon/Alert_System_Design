@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.redis import CHANNEL_STREAMS, get_redis, xadd_notification
-from app.models import App, NotificationTemplate, User, UserPreference
+from app.models import App, User, UserPreference
 from app.schemas.notification import NotificationAccepted, NotificationDetail, NotificationRequest
 from app.services import notification_log
 from app.services.auth import get_current_app
@@ -24,6 +24,7 @@ from app.services.template_service import (
     TemplateNotFoundError,
     TemplateVariableMismatchError,
     get_template,
+    load_template,
     render_template,
 )
 
@@ -105,13 +106,6 @@ async def _channel_disabled(recipient_id: str, channel: str, db: AsyncSession) -
     return (await db.execute(stmt)).scalar_one_or_none() is False
 
 
-async def _template_from_db(template_id: uuid.UUID, db: AsyncSession) -> dict:
-    row = await db.get(NotificationTemplate, template_id)
-    if row is None or row.is_deleted:
-        raise TemplateNotFoundError(template_id)
-    return {"id": str(row.id), "name": row.name, "title": row.title, "body": row.body, "placeholders": row.placeholders}
-
-
 async def _render(req: NotificationRequest, db: AsyncSession, client: aioredis.Redis) -> tuple[str | None, str]:
     if req.template_id is None:
         return req.title, req.body
@@ -120,7 +114,7 @@ async def _render(req: NotificationRequest, db: AsyncSession, client: aioredis.R
             template = await get_template(db, client, req.template_id)
         except RedisError:
             logger.warning("Redis 응답 불가로 템플릿을 DB에서 직접 조회합니다: template_id=%s", req.template_id)
-            template = await _template_from_db(req.template_id, db)
+            template = await load_template(db, req.template_id)
         rendered = render_template(template, req.template_variables or {})
     except TemplateNotFoundError as e:
         raise _error(404, "TEMPLATE_NOT_FOUND", str(e)) from None
