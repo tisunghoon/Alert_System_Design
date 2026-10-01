@@ -7,7 +7,7 @@ from app.mocks import config_store
 from app.mocks.third_party_mock import MOCKS
 from app.workers.base_worker import MAX_BACKOFF_SECONDS, backoff_delay
 from app.workers.ios_worker import IOSWorker
-from tests.unit.test_worker import NOW, FakeSessions, make_notification, message
+from tests.support.worker_fakes import NOW, FakeSessions, make_notification, message
 
 
 async def make_failing_worker():
