@@ -4,12 +4,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, configure_mappers
 
 from app.models import (
-    App,
     Base,
     Device,
     Notification,
     NotificationStatusHistory,
-    NotificationTemplate,
     User,
     UserPreference,
 )

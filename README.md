@@ -93,6 +93,7 @@ python3.12 -m venv .venv
 
 - `tests/unit`: 단위 테스트. DB는 mock, Redis는 fakeredis를 사용합니다.
 - `tests/property`: hypothesis 기반 속성 테스트. 설계서의 Property를 검증합니다.
+- `tests/support`: 테스트 파일이 함께 쓰는 가짜 객체(Worker용 세션, `make_db` 등)입니다.
 - `tests/integration`: 실제 PostgreSQL/Redis를 쓰는 통합 테스트. 아래에서 따로 설명합니다.
 
 통합 테스트는 실제 PostgreSQL/Redis가 필요하며 `integration` 마커로 분리되어 있습니다. 테스트가 마이그레이션을 `downgrade base`로 되돌리고 테이블을 비우며, Redis는 `REDIS_URL`이 가리키는 DB를 `flushdb`합니다. 그래서 개발용 데이터와 분리해서 실행해야 합니다.
@@ -127,5 +128,6 @@ scripts/        # 개발용 앱 시드(seed_app.py)
 tests/
 ├── unit/
 ├── property/
+├── support/    # 테스트 공용 가짜 객체
 └── integration/
 ```

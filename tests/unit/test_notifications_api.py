@@ -56,17 +56,12 @@ def db():
 
 
 @pytest.fixture
-def redis():
-    return fakeredis.FakeAsyncRedis(decode_responses=True)
-
-
-@pytest.fixture
-def client(db, redis):
+def client(db, fake_redis):
     api = FastAPI()
     register_exception_handlers(api)
     api.include_router(notifications.router)
     api.dependency_overrides[get_db] = lambda: db
-    api.dependency_overrides[notifications.redis_client] = lambda: redis
+    api.dependency_overrides[notifications.redis_client] = lambda: fake_redis
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://test")
 
 
@@ -74,11 +69,11 @@ def payload(**overrides):
     return {**CREDS, "event_id": "evt-1", "channel": "ios", "recipient_id": "u1", "title": "t", "body": "b", **overrides}
 
 
-async def stream_entries(redis, channel="ios"):
-    return await redis.xrange(CHANNEL_STREAMS[channel])
+async def stream_entries(fake_redis, channel="ios"):
+    return await fake_redis.xrange(CHANNEL_STREAMS[channel])
 
 
-async def test_post_queues_notification(client, db, redis):
+async def test_post_queues_notification(client, db, fake_redis):
     resp = await client.post("/notifications", json=payload())
     assert resp.status_code == 202
     body = resp.json()
@@ -87,21 +82,21 @@ async def test_post_queues_notification(client, db, redis):
     [log] = [o for o in db.added if isinstance(o, Notification)]
     assert (log.status, log.channel, log.recipient_id) == ("QUEUED", "ios", "u1")
     db.commit.assert_awaited()
-    [(_, fields)] = await stream_entries(redis)
+    [(_, fields)] = await stream_entries(fake_redis)
     assert fields["event_id"] == "evt-1" and fields["body"] == "b" and fields["retry_count"] == "0"
-    assert await redis.exists("dedup:evt-1")
+    assert await fake_redis.exists("dedup:evt-1")
 
 
-async def test_post_generates_event_id(client, redis):
+async def test_post_generates_event_id(client, fake_redis):
     resp = await client.post("/notifications", json={k: v for k, v in payload().items() if k != "event_id"})
     assert resp.status_code == 202
     assert resp.json()["event_id"].startswith("evt_")
 
 
 @pytest.mark.parametrize("channel", ["ios", "android", "sms", "email"])
-async def test_post_uses_channel_stream(client, redis, channel):
+async def test_post_uses_channel_stream(client, fake_redis, channel):
     await client.post("/notifications", json=payload(channel=channel))
-    assert len(await stream_entries(redis, channel)) == 1
+    assert len(await stream_entries(fake_redis, channel)) == 1
 
 
 @pytest.mark.parametrize(
@@ -117,12 +112,12 @@ async def test_post_uses_channel_stream(client, redis, channel):
         ({"body": "b" * 4097}, "body"),
     ],
 )
-async def test_post_invalid_field_returns_400(client, db, redis, override, field):
+async def test_post_invalid_field_returns_400(client, db, fake_redis, override, field):
     resp = await client.post("/notifications", json=payload(**override))
     assert resp.status_code == 400
     assert field in [d["field"] for d in resp.json()["error"]["details"]]
     assert db.added == []
-    assert await stream_entries(redis) == []
+    assert await stream_entries(fake_redis) == []
 
 
 async def test_post_missing_required_fields_returns_400(client):
@@ -153,14 +148,14 @@ async def test_post_duplicate_from_cache_returns_409(client, db):
     assert len(db.added) == 2
 
 
-async def test_post_duplicate_with_empty_cache_returns_409_from_db(client, db, redis):
+async def test_post_duplicate_with_empty_cache_returns_409_from_db(client, db, fake_redis):
     assert (await client.post("/notifications", json=payload())).status_code == 202
-    await redis.delete("dedup:evt-1")
+    await fake_redis.delete("dedup:evt-1")
     db.flush.side_effect = IntegrityError("insert", {}, Exception("uq_notifications_event_id"))
     resp = await client.post("/notifications", json=payload())
     assert resp.status_code == 409
     db.rollback.assert_awaited()
-    assert len(await stream_entries(redis)) == 1
+    assert len(await stream_entries(fake_redis)) == 1
 
 
 async def test_post_redis_down_falls_back_to_db_duplicate_check(db):
@@ -208,21 +203,21 @@ async def test_post_queue_timeout_returns_503(client, monkeypatch):
     assert resp.status_code == 503
 
 
-async def test_post_log_failure_returns_error_and_skips_queue(client, db, redis):
+async def test_post_log_failure_returns_error_and_skips_queue(client, db, fake_redis):
     db.commit.side_effect = OperationalError("commit", {}, Exception("db down"))
     resp = await client.post("/notifications", json=payload())
     assert resp.status_code == 503
-    assert await stream_entries(redis) == []
-    assert not await redis.exists("dedup:evt-1")
+    assert await stream_entries(fake_redis) == []
+    assert not await fake_redis.exists("dedup:evt-1")
 
 
-async def test_post_disabled_channel_is_skipped(client, db, redis):
+async def test_post_disabled_channel_is_skipped(client, db, fake_redis):
     db.preference_enabled = False
     resp = await client.post("/notifications", json=payload())
     assert resp.status_code == 200
     assert resp.json() == {"event_id": "evt-1", "status": "skipped", "queued_at": None, "reason": "channel_disabled"}
     assert db.added == []
-    assert await stream_entries(redis) == []
+    assert await stream_entries(fake_redis) == []
 
 
 async def test_post_enabled_preference_is_queued(client, db):
@@ -237,8 +232,8 @@ def seed_template(redis_client, title="안녕 {{name}}", body="{{item}} 도착")
     )
 
 
-async def test_post_renders_template(client, db, redis):
-    template_id, seeded = seed_template(redis)
+async def test_post_renders_template(client, db, fake_redis):
+    template_id, seeded = seed_template(fake_redis)
     await seeded
     data = {k: v for k, v in payload().items() if k not in ("title", "body")}
     resp = await client.post(
@@ -246,12 +241,12 @@ async def test_post_renders_template(client, db, redis):
         json={**data, "template_id": str(template_id), "template_variables": {"name": "민수", "item": "택배"}},
     )
     assert resp.status_code == 202
-    [(_, fields)] = await stream_entries(redis)
+    [(_, fields)] = await stream_entries(fake_redis)
     assert (fields["title"], fields["body"]) == ("안녕 민수", "택배 도착")
 
 
-async def test_post_template_variable_mismatch_returns_400(client, db, redis):
-    template_id, seeded = seed_template(redis)
+async def test_post_template_variable_mismatch_returns_400(client, db, fake_redis):
+    template_id, seeded = seed_template(fake_redis)
     await seeded
     data = {k: v for k, v in payload().items() if k not in ("title", "body")}
     resp = await client.post(

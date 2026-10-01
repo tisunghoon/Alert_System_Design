@@ -1,7 +1,6 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
-import fakeredis.aioredis
 import httpx
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -39,14 +38,9 @@ def db():
 
 
 @pytest.fixture
-def redis_client():
-    return fakeredis.aioredis.FakeRedis(decode_responses=True)
-
-
-@pytest.fixture
-async def client(db, redis_client):
+async def client(db, fake_redis):
     app.dependency_overrides[get_db] = lambda: db
-    app.dependency_overrides[get_redis] = lambda: redis_client
+    app.dependency_overrides[get_redis] = lambda: fake_redis
     app.dependency_overrides[get_current_app] = lambda: object()
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
@@ -118,18 +112,18 @@ async def test_get_unknown_returns_404(client, db):
     assert res.json()["error"]["code"] == "NOT_FOUND"
 
 
-async def test_put_updates_row_and_invalidates_cache(client, db, redis_client):
+async def test_put_updates_row_and_invalidates_cache(client, db, fake_redis):
     row = make_row()
     db.get.return_value = row
     await client.request("GET", f"/templates/{row.id}")
-    assert await redis_client.exists(f"template:{row.id}") == 1
+    assert await fake_redis.exists(f"template:{row.id}") == 1
 
     res = await client.put(f"/templates/{row.id}", json={"name": "new", "body": "안녕 {{who}}"})
 
     assert res.status_code == 200
     assert row.body == "안녕 {{who}}"
     assert row.placeholders == ["{{who}}"]
-    assert await redis_client.exists(f"template:{row.id}") == 0
+    assert await fake_redis.exists(f"template:{row.id}") == 0
 
 
 async def test_put_unknown_returns_404(client, db):
@@ -140,16 +134,16 @@ async def test_put_unknown_returns_404(client, db):
     assert res.status_code == 404
 
 
-async def test_delete_soft_deletes_and_invalidates_cache(client, db, redis_client):
+async def test_delete_soft_deletes_and_invalidates_cache(client, db, fake_redis):
     row = make_row()
     db.get.return_value = row
-    await redis_client.set(f"template:{row.id}", "{}")
+    await fake_redis.set(f"template:{row.id}", "{}")
 
     res = await client.delete(f"/templates/{row.id}")
 
     assert res.status_code == 204
     assert row.is_deleted is True
-    assert await redis_client.exists(f"template:{row.id}") == 0
+    assert await fake_redis.exists(f"template:{row.id}") == 0
 
 
 async def test_delete_referenced_template_returns_409_with_count(client, db):

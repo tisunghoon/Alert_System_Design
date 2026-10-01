@@ -1,6 +1,5 @@
 from unittest.mock import patch
 
-import fakeredis
 import httpx
 import pytest
 
@@ -10,14 +9,12 @@ from app.mocks import config_store
 
 
 @pytest.fixture
-async def redis_client():
-    c = fakeredis.FakeAsyncRedis(decode_responses=True)
+async def redis_client(fake_redis):
     with (
-        patch.object(mocks, "get_redis", return_value=c),
-        patch.object(dead_letter, "get_redis", return_value=c),
+        patch.object(mocks, "get_redis", return_value=fake_redis),
+        patch.object(dead_letter, "get_redis", return_value=fake_redis),
     ):
-        yield c
-    await c.aclose()
+        yield fake_redis
 
 
 @pytest.fixture

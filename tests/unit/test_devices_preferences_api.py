@@ -1,7 +1,6 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
-import fakeredis.aioredis
 import httpx
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -41,14 +40,9 @@ def db():
 
 
 @pytest.fixture
-def redis_client():
-    return fakeredis.aioredis.FakeRedis(decode_responses=True)
-
-
-@pytest.fixture
-async def client(db, redis_client):
+async def client(db, fake_redis):
     app.dependency_overrides[get_db] = lambda: db
-    app.dependency_overrides[get_redis] = lambda: redis_client
+    app.dependency_overrides[get_redis] = lambda: fake_redis
     app.dependency_overrides[get_current_app] = lambda: object()
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
@@ -56,15 +50,15 @@ async def client(db, redis_client):
     app.dependency_overrides.clear()
 
 
-async def test_register_device_returns_201_and_invalidates_cache(client, db, redis_client):
-    await redis_client.set("device:u1", "[]")
+async def test_register_device_returns_201_and_invalidates_cache(client, db, fake_redis):
+    await fake_redis.set("device:u1", "[]")
     db.execute.side_effect = [result(USER), result(0)]
 
     res = await client.post("/users/u1/devices", json={"channel": "sms", "token": "010-1234"})
 
     assert res.status_code == 201
     assert res.json()["channel"] == "sms"
-    assert await redis_client.exists("device:u1") == 0
+    assert await fake_redis.exists("device:u1") == 0
 
 
 async def test_register_creates_missing_user(client, db):
@@ -138,9 +132,9 @@ async def test_list_devices_unknown_user_is_empty(client, db):
     assert res.json() == []
 
 
-async def test_delete_device_removes_and_invalidates_cache(client, db, redis_client):
+async def test_delete_device_removes_and_invalidates_cache(client, db, fake_redis):
     device = make_device()
-    await redis_client.set("device:u1", "[]")
+    await fake_redis.set("device:u1", "[]")
     db.execute.side_effect = [result(USER)]
     db.get.return_value = device
 
@@ -148,7 +142,7 @@ async def test_delete_device_removes_and_invalidates_cache(client, db, redis_cli
 
     assert res.status_code == 204
     db.delete.assert_awaited_once_with(device)
-    assert await redis_client.exists("device:u1") == 0
+    assert await fake_redis.exists("device:u1") == 0
 
 
 async def test_delete_other_users_device_returns_404(client, db):
@@ -181,9 +175,9 @@ async def test_get_preferences_uses_cache(client, db):
     assert db.execute.await_count == 2
 
 
-async def test_put_preferences_updates_inserts_and_invalidates_cache(client, db, redis_client):
+async def test_put_preferences_updates_inserts_and_invalidates_cache(client, db, fake_redis):
     existing = UserPreference(user_id=USER.id, channel="sms", is_enabled=True)
-    await redis_client.set("pref:u1", "{}")
+    await fake_redis.set("pref:u1", "{}")
     db.execute.side_effect = [
         result(USER),
         result(many=[existing]),
@@ -207,14 +201,14 @@ async def test_put_preferences_rejects_invalid_payload(client, payload):
     assert res.status_code == 400
 
 
-async def test_cache_ttls_are_five_minutes(client, db, redis_client):
+async def test_cache_ttls_are_five_minutes(client, db, fake_redis):
     db.execute.side_effect = [result(USER), result(many=[]), result(USER), result(many=[])]
 
     await client.get("/users/u1/devices")
     await client.get("/users/u1/preferences")
 
-    assert await redis_client.ttl("device:u1") == pytest.approx(300, abs=2)
-    assert await redis_client.ttl("pref:u1") == pytest.approx(300, abs=2)
+    assert await fake_redis.ttl("device:u1") == pytest.approx(300, abs=2)
+    assert await fake_redis.ttl("pref:u1") == pytest.approx(300, abs=2)
 
 
 async def test_put_preferences_retries_after_concurrent_insert(client, db):
@@ -246,10 +240,10 @@ async def test_put_preferences_retries_after_concurrent_insert(client, db):
         ("PUT", "/users/u1/preferences", {"preferences": {"sms": False}}),
     ],
 )
-async def test_invalid_credentials_return_standard_401(db, redis_client, method, path, body):
+async def test_invalid_credentials_return_standard_401(db, fake_redis, method, path, body):
     db.execute.return_value = result(None)
     app.dependency_overrides[get_db] = lambda: db
-    app.dependency_overrides[get_redis] = lambda: redis_client
+    app.dependency_overrides[get_redis] = lambda: fake_redis
     try:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:

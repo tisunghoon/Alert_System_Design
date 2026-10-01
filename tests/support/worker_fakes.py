@@ -66,8 +66,6 @@ def make_notification(status="QUEUED"):
     )
 
 
-
-
 def message(retry_count=0, **extra):
     return {
         "event_id": EVENT_ID,
