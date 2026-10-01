@@ -254,3 +254,51 @@ async def test_invalid_credentials_return_standard_401(db, fake_redis, method, p
     assert res.status_code == 401
     assert res.json()["error"]["code"] == "UNAUTHORIZED"
     assert res.json()["request_id"].startswith("req_")
+
+
+async def test_list_devices_reads_db_when_redis_is_down(client, db, redis_down):
+    device = make_device()
+    db.execute.side_effect = [result(USER), result(many=[device])]
+
+    res = await client.get("/users/u1/devices")
+
+    assert res.status_code == 200
+    assert res.json() == [{"id": str(device.id), "channel": "ios", "token": "tok"}]
+
+
+async def test_register_device_succeeds_when_redis_is_down(client, db, redis_down):
+    db.execute.side_effect = [result(USER), result(0)]
+
+    res = await client.post("/users/u1/devices", json={"channel": "sms", "token": "010-1234"})
+
+    assert res.status_code == 201
+
+
+async def test_delete_device_succeeds_when_redis_is_down(client, db, redis_down):
+    device = make_device()
+    db.execute.side_effect = [result(USER)]
+    db.get.return_value = device
+
+    res = await client.delete(f"/users/u1/devices/{device.id}")
+
+    assert res.status_code == 204
+
+
+async def test_get_preferences_reads_db_when_redis_is_down(client, db, redis_down):
+    pref = UserPreference(user_id=USER.id, channel="sms", is_enabled=False)
+    db.execute.side_effect = [result(USER), result(many=[pref])]
+
+    res = await client.get("/users/u1/preferences")
+
+    assert res.status_code == 200
+    assert res.json()["sms"] is False
+
+
+async def test_put_preferences_succeeds_when_redis_is_down(client, db, redis_down):
+    existing = UserPreference(user_id=USER.id, channel="sms", is_enabled=True)
+    db.execute.side_effect = [result(USER), result(many=[existing]), result(USER), result(many=[existing])]
+
+    res = await client.put("/users/u1/preferences", json={"preferences": {"sms": False}})
+
+    assert res.status_code == 200
+    assert res.json()["sms"] is False
