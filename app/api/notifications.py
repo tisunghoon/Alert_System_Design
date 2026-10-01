@@ -80,6 +80,22 @@ def _validate(payload: dict) -> NotificationRequest:
     return req
 
 
+async def _json_object(request: Request) -> dict:
+    # 헤더로 인증된 요청은 본문이 JSON 객체가 아닐 수 있다.
+    try:
+        payload = await request.json()
+    except ValueError:
+        payload = None
+    if not isinstance(payload, dict):
+        raise _error(
+            400,
+            "VALIDATION_ERROR",
+            "요청 필드 유효성 검증에 실패했습니다.",
+            [{"field": "body", "reason": "요청 본문은 JSON 객체여야 합니다."}],
+        )
+    return payload
+
+
 async def _channel_disabled(recipient_id: str, channel: str, db: AsyncSession) -> bool:
     stmt = (
         select(UserPreference.is_enabled)
@@ -123,7 +139,7 @@ async def create_notification(
     db: AsyncSession = Depends(get_db),
     client: aioredis.Redis = Depends(redis_client),
 ):
-    payload = await request.json()
+    payload = await _json_object(request)
 
     recipient, channel = payload.get("recipient_id"), payload.get("channel")
     if isinstance(recipient, str) and recipient and isinstance(channel, str) and channel in CHANNEL_STREAMS:

@@ -370,3 +370,11 @@ async def test_post_db_error_during_lookup_returns_503(client, db):
     resp = await client.post("/notifications", json=payload())
     assert resp.status_code == 503
     assert resp.json()["error"]["code"] == "DB_UNAVAILABLE"
+
+
+@pytest.mark.parametrize("content", [b"[1]", b"not json", b"", b"\"text\"", b"null"])
+async def test_post_non_object_body_with_header_auth_returns_400(client, db, content):
+    resp = await client.post("/notifications", content=content, headers=HEADERS)
+    assert resp.status_code == 400
+    assert resp.json()["error"]["details"][0]["field"] == "body"
+    assert db.added == []
