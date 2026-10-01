@@ -403,6 +403,28 @@ async def test_trimmed_pending_entry_is_acked(worker, redis_client):
     assert await pending_count(redis_client, RETRY_STREAM, worker.retry_group) == 0
 
 
+@pytest.mark.parametrize("trimmed_fields", [{}, None])
+async def test_pending_entry_with_empty_body_is_acked_not_processed(
+    worker, redis_client, sessions, monkeypatch, trimmed_fields
+):
+    acked = []
+
+    async def fake_read(group, consumer, streams, count, block):
+        (stream,) = streams
+        return [[stream, [("1-0", trimmed_fields)]]] if streams[stream] == "0" else []
+
+    async def fake_ack(client, stream, message_id, group):
+        acked.append((stream, message_id))
+
+    monkeypatch.setattr(redis_client, "xreadgroup", fake_read)
+    monkeypatch.setattr(base_worker, "xack_message", fake_ack)
+
+    await worker.poll_once()
+
+    assert (RETRY_STREAM, "1-0") in acked
+    assert sessions.history == []
+
+
 async def test_due_retry_is_not_starved_by_many_not_due(worker, redis_client, sessions):
     for i in range(12):
         await xadd_notification(
