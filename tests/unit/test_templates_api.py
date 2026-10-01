@@ -71,7 +71,7 @@ async def test_create_returns_201_with_placeholders(client, db):
         {**VALID, "body": "{{ spaced }}"},
         {**VALID, "body": "{{a.b}}"},
         {**VALID, "body": "{{}}"},
-        {**VALID, "body": " ".join(f"{{{{p{i}}}}}" for i in range(51))},
+        {**VALID, "title": None, "body": " ".join(f"{{{{p{i}}}}}" for i in range(51))},
     ],
 )
 async def test_create_rejects_invalid_payload(client, payload):
