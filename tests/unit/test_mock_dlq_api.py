@@ -66,7 +66,7 @@ async def test_config_update_and_read_back(http, redis_client):
     "body", [{"success_rate": 101}, {"success_rate": -1}, {"delay_ms": 30001}, {"delay_ms": -1}]
 )
 async def test_config_rejects_out_of_range(http, body):
-    assert (await http.put("/mocks/sms/config", json=body)).status_code == 422
+    assert (await http.put("/mocks/sms/config", json=body)).status_code == 400
 
 
 async def test_unknown_channel_is_404(http):
