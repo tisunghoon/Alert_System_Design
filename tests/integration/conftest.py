@@ -6,6 +6,7 @@ import uuid
 import pytest
 import redis.asyncio as aioredis
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -25,9 +26,21 @@ def _require_env(name: str) -> str:
     return value
 
 
+def _require_disposable_database(url: str) -> None:
+    # 마이그레이션 fixture가 downgrade base와 TRUNCATE를 실행하므로 개발 DB를 실수로 지우지 않게 막는다
+    name = make_url(url).database or ""
+    if "test" not in name and os.environ.get("ALLOW_DESTRUCTIVE_TESTS") != "1":
+        pytest.fail(
+            f"통합 테스트는 테이블을 삭제합니다. DB 이름('{name}')에 'test'가 없으면 "
+            "ALLOW_DESTRUCTIVE_TESTS=1이 필요합니다.",
+            pytrace=False,
+        )
+
+
 @pytest.fixture(scope="session")
 def migrated_database() -> str:
     url = _require_env("DATABASE_URL")
+    _require_disposable_database(url)
     for command in (["downgrade", "base"], ["upgrade", "head"]):
         subprocess.run([sys.executable, "-m", "alembic", *command], check=True)
     return url

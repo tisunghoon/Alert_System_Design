@@ -16,7 +16,7 @@ async def create(db, app_row, event_id="evt_1", channel="sms"):
     return notification
 
 
-async def test_create_and_get_by_event_id_with_ordered_history(db, app_row):
+async def test_get_by_event_id_returns_history_in_chronological_order(db, app_row):
     n = await create(db, app_row)
     await log.update_status(n.id, "PROCESSING", "w1", None, db)
     await asyncio.sleep(0.01)
@@ -27,8 +27,7 @@ async def test_create_and_get_by_event_id_with_ordered_history(db, app_row):
     found = await log.get_by_event_id("evt_1", db)
     assert found.status == "DELIVERED"
     assert found.delivered_at is not None
-    history = sorted(found.history, key=lambda h: h.changed_at)
-    assert [h.status for h in history] == ["QUEUED", "PROCESSING", "DELIVERED"]
+    assert [h.status for h in found.history] == ["QUEUED", "PROCESSING", "DELIVERED"]
     assert await log.get_by_event_id("missing", db) is None
 
 
