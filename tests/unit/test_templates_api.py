@@ -1,6 +1,7 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
+import fakeredis
 import httpx
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -185,30 +186,23 @@ def test_extra_credential_fields_are_ignored_by_schema():
 
 
 @pytest.fixture
-async def client_with_redis_down(db):
-    down = fakeredis.aioredis.FakeRedis(connected=False, decode_responses=True)
-    app.dependency_overrides[get_db] = lambda: db
-    app.dependency_overrides[get_redis] = lambda: down
-    app.dependency_overrides[get_current_app] = lambda: object()
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
-        yield c
-    app.dependency_overrides.clear()
+def redis_down():
+    app.dependency_overrides[get_redis] = lambda: fakeredis.FakeAsyncRedis(connected=False, decode_responses=True)
 
 
-async def test_read_falls_back_to_db_when_redis_is_down(client_with_redis_down, db):
+async def test_read_falls_back_to_db_when_redis_is_down(client, db, redis_down):
     row = make_row()
     db.get.return_value = row
 
-    res = await client_with_redis_down.get(f"/templates/{row.id}")
+    res = await client.get(f"/templates/{row.id}")
 
     assert res.status_code == 200
     assert res.json()["name"] == "order"
 
 
-async def test_read_missing_template_is_404_when_redis_is_down(client_with_redis_down, db):
+async def test_read_missing_template_is_404_when_redis_is_down(client, db, redis_down):
     db.get.return_value = None
 
-    res = await client_with_redis_down.get(f"/templates/{uuid.uuid4()}")
+    res = await client.get(f"/templates/{uuid.uuid4()}")
 
     assert res.status_code == 404
