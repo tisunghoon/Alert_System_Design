@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -92,7 +93,6 @@ async def test_health_ok(http, db, redis_client):
 
 async def test_health_timeout_counts_as_unhealthy(http, db, redis_client, monkeypatch):
     async def slow(*_):
-        import asyncio
         await asyncio.sleep(1)
 
     monkeypatch.setattr(monitoring, "HEALTH_TIMEOUT_SECONDS", 0.05)
