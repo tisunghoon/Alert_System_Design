@@ -9,10 +9,10 @@ from app.core.database import get_db
 from app.main import app
 
 
-# Property 15: 응답은 세 구성 요소 상태를 모두 담고, 하나라도 비정상이면 503
 @settings(max_examples=16, deadline=None)
 @given(db_ok=st.booleans(), cache_ok=st.booleans(), mq_ok=st.booleans())
 async def test_health_reports_all_components(db_ok, cache_ok, mq_ok):
+    """Feature: alert-system, Property 15: 응답은 세 구성 요소 상태를 모두 담고, 하나라도 비정상이면 503"""
     async def check(ok):
         if not ok:
             raise ConnectionError("down")

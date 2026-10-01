@@ -1,24 +1,15 @@
-from unittest.mock import AsyncMock, MagicMock
-
 import fakeredis
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from app.services import deduplication
+from tests.support.db_fakes import make_db
 
 
-def make_db(found: bool):
-    db = AsyncMock()
-    result = MagicMock()
-    result.first.return_value = ("id",) if found else None
-    db.execute.return_value = result
-    return db
-
-
-# Property 3: 같은 Event_ID를 처리한 뒤에는 이후 요청이 항상 중복으로 판정된다
 @settings(max_examples=50, deadline=None)
 @given(event_id=st.text(min_size=1, max_size=256))
 async def test_second_request_with_same_event_id_is_duplicate(event_id):
+    """Feature: alert-system, Property 3: 같은 Event_ID를 처리한 뒤에는 이후 요청이 항상 중복으로 판정된다"""
     client = fakeredis.FakeAsyncRedis(decode_responses=True)
     db = make_db(False)
 
