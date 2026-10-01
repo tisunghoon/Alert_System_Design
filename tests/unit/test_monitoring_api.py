@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import fakeredis
 import httpx
 import pytest
+from sqlalchemy.dialects import postgresql
 
 from app.api import monitoring
 from app.core.config import settings
@@ -100,3 +101,30 @@ async def test_health_timeout_counts_as_unhealthy(http, db, redis_client, monkey
     resp = await http.get("/health")
     assert resp.status_code == 503
     assert resp.json()["unhealthy"] == ["database"]
+
+
+async def test_stats_accepts_mixed_naive_and_aware_datetimes(http, db):
+    result = MagicMock()
+    result.all.return_value = []
+    db.execute.return_value = result
+    params = {"start": "2024-01-01T00:00:00", "end": "2024-01-02T00:00:00+09:00"}
+    assert (await http.get("/monitoring/stats", params=params)).status_code == 200
+
+
+async def test_stats_query_filters_by_queued_at_and_groups_by_channel(http, db):
+    result = MagicMock()
+    result.all.return_value = []
+    db.execute.return_value = result
+    params = {"start": "2024-01-01T00:00:00", "end": "2024-01-02T00:00:00"}
+    await http.get("/monitoring/stats", params=params)
+
+    sql = str(db.execute.call_args.args[0].compile(dialect=postgresql.dialect())).lower()
+    assert "queued_at >=" in sql and "queued_at <=" in sql
+    assert "group by notifications.channel" in sql
+
+
+async def test_health_failure_logs_component(http, db, redis_client, caplog):
+    db.execute.side_effect = ConnectionError("down")
+    with caplog.at_level(logging.WARNING):
+        await http.get("/health")
+    assert "component=database" in caplog.text

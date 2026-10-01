@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
@@ -23,9 +23,9 @@ HEALTH_TIMEOUT_SECONDS = 3
 @router.get("/monitoring/queues")
 async def get_queues():
     client = get_redis()
+    sizes = await asyncio.gather(*(get_stream_length(client, s) for s in CHANNEL_STREAMS.values()))
     queues = []
-    for channel, stream in CHANNEL_STREAMS.items():
-        size = await get_stream_length(client, stream)
+    for (channel, stream), size in zip(CHANNEL_STREAMS.items(), sizes):
         if size > settings.QUEUE_ALERT_THRESHOLD:
             logger.warning(
                 "큐 크기가 임계값을 초과했습니다: channel=%s size=%d threshold=%d",
@@ -43,6 +43,9 @@ async def get_stats(
 ):
     if start is None or end is None:
         raise HTTPException(400, "start와 end 시간 범위는 필수입니다.")
+    # naive 입력은 UTC로 간주해 aware 값과 비교할 때 TypeError가 나지 않게 한다
+    start = start if start.tzinfo else start.replace(tzinfo=UTC)
+    end = end if end.tzinfo else end.replace(tzinfo=UTC)
     if end < start or end - start > MAX_STATS_RANGE:
         raise HTTPException(400, "시간 범위는 start 이후 최대 30일이어야 합니다.")
 
@@ -74,14 +77,14 @@ async def _check_cache() -> None:
 
 async def _check_queue() -> None:
     client = get_redis()
-    for stream in ALL_STREAMS:
-        await get_stream_length(client, stream)
+    await asyncio.gather(*(get_stream_length(client, stream) for stream in ALL_STREAMS))
 
 
-async def _status(check) -> str:
+async def _status(name: str, check) -> str:
     try:
         await asyncio.wait_for(check, HEALTH_TIMEOUT_SECONDS)
     except Exception:
+        logger.warning("헬스체크 실패: component=%s", name, exc_info=True)
         return "unhealthy"
     return "healthy"
 
@@ -89,7 +92,9 @@ async def _status(check) -> str:
 @router.get("/health")
 async def health(db: AsyncSession = Depends(get_db)):
     db_status, cache_status, queue_status = await asyncio.gather(
-        _status(_check_db(db)), _status(_check_cache()), _status(_check_queue())
+        _status("database", _check_db(db)),
+        _status("cache", _check_cache()),
+        _status("message_queue", _check_queue()),
     )
     components = {"database": db_status, "cache": cache_status, "message_queue": queue_status}
     unhealthy = [name for name, status in components.items() if status != "healthy"]
