@@ -1,0 +1,65 @@
+x-app: &app
+  build: .
+  env_file: .env.example
+  environment:
+    DATABASE_URL: postgresql+asyncpg://alert:alert@postgres:5432/alert
+    REDIS_URL: redis://redis:6379/0
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  alert_server:
+    <<: *app
+    ports:
+      - "8000:8000"
+
+  worker_ios:
+    <<: *app
+    command: python -m app.workers.ios_worker
+
+  worker_android:
+    <<: *app
+    command: python -m app.workers.android_worker
+
+  worker_sms:
+    <<: *app
+    command: python -m app.workers.sms_worker
+
+  worker_email:
+    <<: *app
+    command: python -m app.workers.email_worker
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: alert
+      POSTGRES_PASSWORD: alert
+      POSTGRES_DB: alert
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alert -d alert"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
+  redisdata:
