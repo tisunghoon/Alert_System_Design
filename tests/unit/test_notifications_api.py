@@ -363,3 +363,20 @@ async def test_post_commits_log_before_enqueueing(client, db, monkeypatch):
 
     assert (await client.post("/notifications", json=payload())).status_code == 202
     assert calls == ["commit", "xadd"]
+
+
+async def test_rate_limit_is_checked_before_duplicate_and_validation(client, monkeypatch):
+    monkeypatch.setattr(rate_limiter.settings, "RATE_LIMIT_DEFAULT", 1)
+    assert (await client.post("/notifications", json=payload())).status_code == 202
+
+    resp = await client.post("/notifications", json=payload(body=""))
+
+    assert resp.status_code == 429
+
+
+async def test_duplicate_is_checked_before_validation(client):
+    assert (await client.post("/notifications", json=payload())).status_code == 202
+
+    resp = await client.post("/notifications", json=payload(body=""))
+
+    assert resp.status_code == 409
