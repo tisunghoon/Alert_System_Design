@@ -83,6 +83,10 @@ async def xack_message(
     return await client.xack(stream, group, message_id)
 
 
+async def xdel_message(client: aioredis.Redis, stream: str, message_id: str) -> int:
+    return await client.xdel(stream, message_id)
+
+
 async def get_stream_length(client: aioredis.Redis, stream: str) -> int:
     return await client.xlen(stream)
 
