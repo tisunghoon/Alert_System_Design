@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from app.api import dead_letter, devices, mocks, monitoring, preferences, templates
+from app.api import dead_letter, devices, mocks, monitoring, notifications, preferences, templates
 from app.core.errors import register_exception_handlers
 
 app = FastAPI(title="Alert System")
@@ -14,6 +14,7 @@ routers: list = [
     monitoring.router,
     dead_letter.router,
     mocks.router,
+    notifications.router,
 ]
 
 for router in routers:
