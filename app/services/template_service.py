@@ -1,11 +1,15 @@
+import logging
 import uuid
 
 import redis.asyncio as aioredis
+from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.redis import get_cache, set_cache
 from app.models.notification_template import NotificationTemplate
 from app.schemas.template import PLACEHOLDER_PATTERN
+
+logger = logging.getLogger(__name__)
 
 TEMPLATE_CACHE_TTL = 600
 
@@ -63,10 +67,17 @@ async def get_template(
     session: AsyncSession, client: aioredis.Redis, template_id: uuid.UUID
 ) -> dict:
     key = f"template:{template_id}"
-    cached = await get_cache(client, key)
+    try:
+        cached = await get_cache(client, key)
+    except RedisError:
+        logger.warning("Redis 응답 불가로 템플릿을 DB에서 직접 조회합니다: template_id=%s", template_id)
+        cached = None
     if cached is not None:
         return cached
 
     template = await load_template(session, template_id)
-    await set_cache(client, key, template, TEMPLATE_CACHE_TTL)
+    try:
+        await set_cache(client, key, template, TEMPLATE_CACHE_TTL)
+    except RedisError:
+        logger.warning("템플릿 캐시 저장에 실패했습니다: template_id=%s", template_id)
     return template

@@ -24,7 +24,6 @@ from app.services.template_service import (
     TemplateNotFoundError,
     TemplateVariableMismatchError,
     get_template,
-    load_template,
     render_template,
 )
 
@@ -110,11 +109,7 @@ async def _render(req: NotificationRequest, db: AsyncSession, client: aioredis.R
     if req.template_id is None:
         return req.title, req.body
     try:
-        try:
-            template = await get_template(db, client, req.template_id)
-        except RedisError:
-            logger.warning("Redis 응답 불가로 템플릿을 DB에서 직접 조회합니다: template_id=%s", req.template_id)
-            template = await load_template(db, req.template_id)
+        template = await get_template(db, client, req.template_id)
         rendered = render_template(template, req.template_variables or {})
     except TemplateNotFoundError as e:
         raise _error(404, "TEMPLATE_NOT_FOUND", str(e)) from None
