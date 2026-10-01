@@ -1,6 +1,7 @@
 import uuid
 from unittest.mock import AsyncMock
 
+import fakeredis
 import pytest
 
 from app.models.notification_template import NotificationTemplate
@@ -100,3 +101,14 @@ async def test_deleted_template_raises_not_found_and_is_not_cached(fake_redis):
     with pytest.raises(TemplateNotFoundError):
         await get_template(session, fake_redis, template_id)
     assert await fake_redis.exists(f"template:{template_id}") == 0
+
+
+async def test_get_template_reads_db_when_redis_is_down():
+    down = fakeredis.FakeAsyncRedis(connected=False, decode_responses=True)
+    template_id = uuid.uuid4()
+    session = AsyncMock()
+    session.get.return_value = make_row(template_id)
+
+    template = await get_template(session, down, template_id)
+
+    assert template["body"] == "{{item}}"
