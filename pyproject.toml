@@ -31,5 +31,6 @@ include = ["app*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-m 'not integration'"
 markers = ["integration: 실제 PostgreSQL/Redis가 필요한 통합 테스트 (pytest -m integration)"]

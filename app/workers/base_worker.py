@@ -50,7 +50,8 @@ class BaseWorker:
     ):
         self.redis = redis_client or get_redis()
         self.session_factory = session_factory
-        # 재시작해도 이전 pending을 이어받도록 컨슈머 이름은 고정한다. 인스턴스를 여러 개 띄우면 WORKER_ID로 구분한다.
+        # 재시작해도 이전 pending을 이어받도록 컨슈머 이름은 고정한다.
+        # 인스턴스를 여러 개 띄우면 WORKER_ID를 서로 다르게 줘야 한다(같은 이름이면 PEL 재읽기로 이중 전송될 수 있다).
         self.worker_id = worker_id or os.environ.get("WORKER_ID") or self.channel
         self.send_timeout = send_timeout
         self.clock = clock
@@ -95,8 +96,8 @@ class BaseWorker:
             for message_id, fields in messages:
                 if self._stop.is_set():
                     return
-                if fields is None:
-                    # XTRIM으로 본문이 이미 지워진 pending 항목
+                if not fields:
+                    # XTRIM으로 본문이 이미 지워진 pending 항목(redis-py는 빈 dict로 돌려준다)
                     await xack_message(self.redis, stream, message_id, group)
                     continue
                 await self.handle_message(stream, group, message_id, fields)
