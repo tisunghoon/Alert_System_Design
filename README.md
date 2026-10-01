@@ -23,6 +23,16 @@ python3.12 -m venv .venv
 .venv/bin/pytest tests/unit tests/property
 ```
 
+통합 테스트는 실제 PostgreSQL/Redis가 필요하며 `integration` 마커로 분리되어 있습니다. 테이블을 삭제하므로 DB 이름에 `test`가 들어간 전용 DB를 사용합니다.
+
+```bash
+docker compose up -d postgres redis
+docker compose exec postgres createdb -U alert alert_test
+DATABASE_URL=postgresql+asyncpg://alert:alert@localhost:5432/alert_test \
+REDIS_URL=redis://localhost:6379/0 \
+.venv/bin/pytest -m integration tests/integration
+```
+
 ## 디렉터리 구조
 
 ```
