@@ -303,10 +303,13 @@ while True:
 | `android_stream` | Android 알림 전송 큐 |
 | `sms_stream` | SMS 알림 전송 큐 |
 | `email_stream` | 이메일 알림 전송 큐 |
-| `retry_stream` | 재시도 대기 큐 (채널 구분 없음, Worker가 채널 필드로 라우팅) |
+| `retry_stream` | 재시도 대기 큐 (채널 구분 없음, 모든 채널 Worker가 읽고 `channel` 필드가 다르면 ack 후 건너뜀) |
 | `dead_letter_stream` | 최종 실패 알림 보관 |
 
-각 Stream은 Consumer Group (`notification_consumers`)을 통해 Worker가 메시지를 병렬 처리합니다.
+채널 Stream은 Consumer Group (`notification_consumers`)을 통해 Worker가 메시지를 병렬 처리합니다. `retry_stream`은 채널별 Worker가 각자 Consumer Group `notification_consumers_<channel>_retry`를 사용하므로 4개 그룹이 같은 항목을 읽습니다.
+
+- `next_retry_after`(Unix timestamp) 도래 전의 재시도 메시지는 처리하지 않고 pending으로 남겨 두며, Worker가 매 poll마다 pending을 다시 확인합니다.
+- `retry_stream`은 `XDEL`을 쓰지 않습니다. 4개 그룹이 같은 항목을 읽기 때문에 재시도를 enqueue한 직후 `XTRIM MINID`로 1시간이 지난 항목만 정리합니다.
 
 ### Cache (Redis)
 
@@ -317,6 +320,9 @@ while True:
 | `device:{user_id}` | JSON String | 5분 | 단말 정보 캐시 |
 | `template:{template_id}` | JSON String | 10분 | 템플릿 캐시 |
 | `pref:{user_id}` | JSON String | 5분 | User_Preference 캐시 |
+| `rate_limit_cfg:{user_id}:{channel}` | String (정수) | 없음 | 사용자별 Rate Limit 설정. 없으면 전역 기본값 사용 |
+| `mock_cfg:{channel}` | Hash (`success_rate`, `delay_ms`) | 없음 | Third_Party_Mock 설정을 API와 Worker가 공유 |
+| `mock_records:{channel}` | List (JSON) | 없음 (최대 10,000건) | Third_Party_Mock 수신 기록을 API와 Worker가 공유 |
 
 ### Third_Party_Mock
 
@@ -343,6 +349,11 @@ class ThirdPartyMock:
         self.records.append(record)
         return success
 ```
+
+API 서버와 Worker는 별도 프로세스라 인메모리 Mock 상태가 공유되지 않습니다. 그래서 설정은 Redis Hash `mock_cfg:{channel}`에, 수신 기록은 Redis List `mock_records:{channel}`에도 저장합니다.
+
+- Worker는 전송 직전에 `mock_cfg:{channel}`을 읽어 Mock에 적용하고(`app/mocks/config_store.py`의 `send_with_shared_state`), 전송 후 수신 기록을 `RPUSH` + `LTRIM -10000 -1`로 List에 남겨 최신 10,000건만 유지합니다.
+- Mock 관리 API(`PUT /mocks/{channel}/config`, `GET /mocks/{channel}/records`, `POST /mocks/reset`)는 이 Redis 키를 읽고 씁니다. 초기화는 모든 채널의 두 키를 삭제하며 기본값은 성공률 100%, 지연 0ms입니다.
 
 ---
 
@@ -440,8 +451,9 @@ CREATE TABLE notifications (
     queued_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     delivered_at    TIMESTAMPTZ,
     failed_at       TIMESTAMPTZ,
-    expires_at      TIMESTAMPTZ                    -- 30일 보존 기준
-        GENERATED ALWAYS AS (queued_at + INTERVAL '30 days') STORED
+    -- 30일 보존 기준. timestamptz + interval은 STABLE이라 generation expression에 쓸 수 없어 UTC timestamp로 계산한다.
+    expires_at      TIMESTAMPTZ
+        GENERATED ALWAYS AS (((queued_at AT TIME ZONE 'UTC') + INTERVAL '30 days') AT TIME ZONE 'UTC') STORED
 );
 
 CREATE INDEX idx_notifications_event_id ON notifications(event_id);
@@ -482,6 +494,13 @@ template:{template_id}    →  JSON String  (TTL: 600초)
 
 # 사용자 알림 수신 설정 캐시 (Requirement 2.6)
 pref:{user_id}            →  JSON String  (TTL: 300초)
+
+# 사용자별 Rate Limit 설정 (Requirement 5.4)
+rate_limit_cfg:{user_id}:{channel}  →  String "10"  (TTL 없음, 없으면 전역 기본값 60)
+
+# Third_Party_Mock 공유 상태 (Requirement 9)
+mock_cfg:{channel}        →  Hash {success_rate, delay_ms}  (TTL 없음)
+mock_records:{channel}    →  List of JSON  (RPUSH + LTRIM으로 최신 10,000건 유지)
 ```
 
 ### Redis Streams 메시지 구조
@@ -496,8 +515,20 @@ title           = "새 메시지"
 body            = "홍길동님이 메시지를 보냈습니다."
 retry_count     = "0"
 next_retry_after = ""          # retry_stream에서만 사용 (Unix timestamp)
-enqueued_at     = "2024-01-15T10:00:00Z"
+enqueued_at     = "2024-01-15T10:00:00+00:00"
 ```
+
+값은 모두 문자열로 저장됩니다. `title`이 없으면 빈 문자열이고, `enqueued_at`은 UTC ISO 8601 형식(`+00:00` 표기)입니다.
+
+```
+# Dead Letter Stream 메시지 필드 (XADD dead_letter_stream * ...)
+notification_id = "550e8400-e29b-41d4-a716-446655440001"  # 없으면 event_id로 대체해 조회
+failed_at       = "2024-01-15T10:00:30+00:00"               # 최종 실패 시각, ISO 8601 UTC
+failure_reason  = "timeout"
+retry_count     = "3"
+```
+
+`GET /dead-letter`는 이 필드를 읽어 `notification_id`, `failed_at`, `failure_reason`, `retry_count`로 반환하며 최신 실패가 먼저 오도록 `XREVRANGE`로 조회합니다. Worker는 Dead Letter로 이동할 때 위 필드명으로 기록해야 합니다.
 
 ---
 
