@@ -23,7 +23,7 @@ async def make_failing_worker():
     return worker, client, sessions
 
 
-@settings(max_examples=20, deadline=None)
+@settings(max_examples=100, deadline=None)
 @given(failures=st.integers(min_value=0, max_value=3))
 async def test_prop_retry_count_increases_by_one_until_dead_letter(failures):
     """Feature: alert-system, Property 6: 재시도 횟수 단조 증가"""
@@ -66,7 +66,7 @@ async def test_retry_count_walks_up_to_dead_letter_without_gaps():
     await client.aclose()
 
 
-@settings(max_examples=20, deadline=None)
+@settings(max_examples=100, deadline=None)
 @given(retry_number=st.integers(min_value=1, max_value=3))
 async def test_prop_backoff_delay_matches_formula_and_is_monotonic(retry_number):
     """Feature: alert-system, Property 7: 지수 백오프 지연 단조 증가"""

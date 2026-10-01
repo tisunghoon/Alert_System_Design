@@ -423,6 +423,8 @@ async def test_pending_entry_with_empty_body_is_acked_not_processed(
 
     assert (RETRY_STREAM, "1-0") in acked
     assert sessions.history == []
+    assert await redis_client.xlen(RETRY_STREAM) == 0
+    assert await redis_client.xlen(DEAD_LETTER_STREAM) == 0
 
 
 async def test_due_retry_is_not_starved_by_many_not_due(worker, redis_client, sessions):
