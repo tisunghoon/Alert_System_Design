@@ -81,13 +81,13 @@ async def test_register_creates_missing_user(client, db):
 async def test_register_rejects_invalid_channel(client, channel):
     res = await client.post("/users/u1/devices", json={"channel": channel, "token": "t"})
 
-    assert res.status_code in (400, 422)
+    assert res.status_code == 400
 
 
 async def test_register_rejects_empty_token(client):
     res = await client.post("/users/u1/devices", json={"channel": "ios", "token": ""})
 
-    assert res.status_code in (400, 422)
+    assert res.status_code == 400
 
 
 async def test_register_allows_tenth_device(client, db):
@@ -204,4 +204,59 @@ async def test_put_preferences_updates_inserts_and_invalidates_cache(client, db,
 async def test_put_preferences_rejects_invalid_payload(client, payload):
     res = await client.put("/users/u1/preferences", json=payload)
 
-    assert res.status_code in (400, 422)
+    assert res.status_code == 400
+
+
+async def test_cache_ttls_are_five_minutes(client, db, redis_client):
+    db.execute.side_effect = [result(USER), result(many=[]), result(USER), result(many=[])]
+
+    await client.get("/users/u1/devices")
+    await client.get("/users/u1/preferences")
+
+    assert await redis_client.ttl("device:u1") == pytest.approx(300, abs=2)
+    assert await redis_client.ttl("pref:u1") == pytest.approx(300, abs=2)
+
+
+async def test_put_preferences_retries_after_concurrent_insert(client, db):
+    existing = UserPreference(user_id=USER.id, channel="sms", is_enabled=True)
+    db.commit.side_effect = [IntegrityError("insert", {}, Exception()), None]
+    db.execute.side_effect = [
+        result(USER),
+        result(many=[]),
+        result(USER),
+        result(many=[existing]),
+        result(USER),
+        result(many=[existing]),
+    ]
+
+    res = await client.put("/users/u1/preferences", json={"preferences": {"sms": False}})
+
+    assert res.status_code == 200
+    assert existing.is_enabled is False
+    assert db.commit.await_count == 2
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("POST", "/users/u1/devices", {"channel": "ios", "token": "t"}),
+        ("GET", "/users/u1/devices", {}),
+        ("GET", "/users/u1/preferences", {}),
+        ("PUT", "/users/u1/preferences", {"preferences": {"sms": False}}),
+    ],
+)
+async def test_invalid_credentials_return_standard_401(db, redis_client, method, path, body):
+    db.execute.return_value = result(None)
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_redis] = lambda: redis_client
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            res = await c.request(method, path, json={**body, "app_key": "k", "app_secret": "s"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert res.status_code == 401
+    assert res.json()["error"]["code"] == "UNAUTHORIZED"
+    assert res.json()["request_id"].startswith("req_")
