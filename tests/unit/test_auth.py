@@ -103,3 +103,26 @@ async def test_dependency_returns_401_for_unknown_app(client_factory):
     async with client_factory(None) as client:
         resp = await client.post("/protected", json={"app_key": "key", "app_secret": "secret"})
     assert resp.status_code == 401
+
+
+async def test_dependency_accepts_headers_without_body(client_factory):
+    async with client_factory(make_app()) as client:
+        resp = await client.post("/protected", headers={"X-App-Key": "key", "X-App-Secret": "secret"})
+    assert resp.status_code == 200
+
+
+async def test_dependency_prefers_body_over_headers(client_factory):
+    async with client_factory(make_app()) as client:
+        resp = await client.post(
+            "/protected",
+            json={"app_key": "key", "app_secret": "wrong"},
+            headers={"X-App-Key": "key", "X-App-Secret": "secret"},
+        )
+    assert resp.status_code == 401
+
+
+@pytest.mark.parametrize("headers", [{}, {"X-App-Key": "key"}, {"X-App-Secret": "secret"}, {"X-App-Key": "", "X-App-Secret": ""}])
+async def test_dependency_rejects_missing_headers(client_factory, headers):
+    async with client_factory(make_app()) as client:
+        resp = await client.post("/protected", headers=headers)
+    assert resp.status_code == 401

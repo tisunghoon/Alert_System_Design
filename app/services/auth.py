@@ -31,9 +31,12 @@ async def get_current_app(request: Request, db: AsyncSession = Depends(get_db)) 
         body = await request.json()
     except ValueError:
         body = None
-    if not isinstance(body, dict):
-        body = {}
-    app = await authenticate_app(body.get("app_key"), body.get("app_secret"), db)
+    if isinstance(body, dict) and ("app_key" in body or "app_secret" in body):
+        app_key, app_secret = body.get("app_key"), body.get("app_secret")
+    else:
+        # 본문이 없는 요청(GET 등)은 헤더로 인증한다.
+        app_key, app_secret = request.headers.get("X-App-Key"), request.headers.get("X-App-Secret")
+    app = await authenticate_app(app_key, app_secret, db)
     if app is None:
         raise HTTPException(status_code=401, detail="appKey 또는 appSecret 인증에 실패했습니다.")
     return app
