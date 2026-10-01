@@ -10,6 +10,7 @@ from hypothesis import strategies as st
 
 from app.api import notifications
 from app.core.database import get_db
+from app.core.errors import register_exception_handlers
 from app.models import App
 
 REGISTERED = App(id=uuid.uuid4(), app_key="valid-key", app_secret="valid-secret", name="svc", is_active=True)
@@ -36,6 +37,7 @@ class FakeDB:
 
 async def post(body: dict) -> httpx.Response:
     api = FastAPI()
+    register_exception_handlers(api)
     api.include_router(notifications.router)
     api.dependency_overrides[get_db] = lambda: FakeDB()
     redis = fakeredis.FakeAsyncRedis(decode_responses=True)
@@ -107,4 +109,4 @@ def test_property_2_invalid_fields_return_400_with_field_names(channel, recipien
         assert resp.status_code == 202
     else:
         assert resp.status_code == 400
-        assert {d["field"] for d in resp.json()["detail"]["details"]} == expected_invalid
+        assert {d["field"] for d in resp.json()["error"]["details"]} == expected_invalid

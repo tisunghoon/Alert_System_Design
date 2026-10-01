@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import uuid
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
 import redis.asyncio as aioredis
@@ -13,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.redis import CHANNEL_STREAMS, get_redis, xadd_notification
-from app.models import App, User, UserPreference
+from app.models import App, NotificationTemplate, User, UserPreference
 from app.schemas.notification import NotificationAccepted, NotificationDetail, NotificationRequest
 from app.services import notification_log
 from app.services.auth import get_current_app
@@ -40,6 +41,15 @@ def redis_client() -> aioredis.Redis:
 def _error(status: int, code: str, message: str, details: list[dict] | None = None, **kwargs) -> HTTPException:
     detail = {"code": code, "message": message, "details": details or []}
     return HTTPException(status_code=status, detail=detail, **kwargs)
+
+
+@contextmanager
+def _db_guard():
+    try:
+        yield
+    except SQLAlchemyError:
+        logger.exception("DB 조회에 실패했습니다")
+        raise _error(503, "DB_UNAVAILABLE", "서비스를 일시적으로 사용할 수 없습니다.") from None
 
 
 def _reason(error: dict) -> str:
@@ -79,11 +89,22 @@ async def _channel_disabled(recipient_id: str, channel: str, db: AsyncSession) -
     return (await db.execute(stmt)).scalar_one_or_none() is False
 
 
+async def _template_from_db(template_id: uuid.UUID, db: AsyncSession) -> dict:
+    row = await db.get(NotificationTemplate, template_id)
+    if row is None or row.is_deleted:
+        raise TemplateNotFoundError(template_id)
+    return {"id": str(row.id), "name": row.name, "title": row.title, "body": row.body, "placeholders": row.placeholders}
+
+
 async def _render(req: NotificationRequest, db: AsyncSession, client: aioredis.Redis) -> tuple[str | None, str]:
     if req.template_id is None:
         return req.title, req.body
     try:
-        template = await get_template(db, client, req.template_id)
+        try:
+            template = await get_template(db, client, req.template_id)
+        except RedisError:
+            logger.warning("Redis 응답 불가로 템플릿을 DB에서 직접 조회합니다: template_id=%s", req.template_id)
+            template = await _template_from_db(req.template_id, db)
         rendered = render_template(template, req.template_variables or {})
     except TemplateNotFoundError as e:
         raise _error(404, "TEMPLATE_NOT_FOUND", str(e)) from None
@@ -112,17 +133,23 @@ async def create_notification(
             )
 
     event_id = payload.get("event_id")
-    if isinstance(event_id, str) and event_id and await check_duplicate(event_id, db, client):
-        raise _error(409, "DUPLICATE_EVENT", f"이미 처리된 event_id입니다: {event_id}")
+    if isinstance(event_id, str) and event_id:
+        with _db_guard():
+            duplicate = await check_duplicate(event_id, db, client)
+        if duplicate:
+            raise _error(409, "DUPLICATE_EVENT", f"이미 처리된 event_id입니다: {event_id}")
 
     req = _validate(payload)
     event_id = req.event_id or f"evt_{uuid.uuid4().hex}"
 
-    if await _channel_disabled(req.recipient_id, req.channel, db):
+    with _db_guard():
+        disabled = await _channel_disabled(req.recipient_id, req.channel, db)
+    if disabled:
         response.status_code = 200
         return NotificationAccepted(event_id=event_id, status="skipped", reason="channel_disabled")
 
-    title, body = await _render(req, db, client)
+    with _db_guard():
+        title, body = await _render(req, db, client)
 
     try:
         log = await notification_log.create_queued_log(
@@ -165,9 +192,12 @@ async def create_notification(
 
 
 @router.get("/notifications/{event_id}", response_model=NotificationDetail)
-async def get_notification(event_id: str, db: AsyncSession = Depends(get_db)):
+async def get_notification(
+    event_id: str, app: App = Depends(get_current_app), db: AsyncSession = Depends(get_db)
+):
     notification = await notification_log.get_by_event_id(event_id, db)
-    if notification is None:
+    # 다른 앱의 알림은 존재 여부도 알 수 없도록 같은 404로 응답한다.
+    if notification is None or notification.app_id != app.id:
         raise _error(404, "NOTIFICATION_NOT_FOUND", f"event_id를 찾을 수 없습니다: {event_id}")
     return NotificationDetail(
         **{c: getattr(notification, c) for c in NotificationDetail.model_fields if c != "history"},

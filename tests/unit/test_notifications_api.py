@@ -14,7 +14,8 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from app.api import notifications
 from app.core.database import get_db
 from app.core.redis import CHANNEL_STREAMS
-from app.models import App, Notification, NotificationStatusHistory
+from app.core.errors import register_exception_handlers
+from app.models import App, Notification, NotificationStatusHistory, NotificationTemplate
 from app.services import rate_limiter
 
 APP = App(id=uuid.uuid4(), app_key="key", app_secret="secret", name="svc", is_active=True)
@@ -32,9 +33,12 @@ class FakeDB:
         self.delivered_exists = False
         self.preference_enabled = None
         self.notification = None
+        self.lookup_error = None
 
     async def execute(self, stmt):
         sql = str(stmt)
+        if self.lookup_error and "FROM apps" not in sql:
+            raise self.lookup_error
         result = MagicMock()
         if "FROM apps" in sql:
             result.scalar_one_or_none.return_value = APP
@@ -59,6 +63,7 @@ def redis():
 @pytest.fixture
 def client(db, redis):
     api = FastAPI()
+    register_exception_handlers(api)
     api.include_router(notifications.router)
     api.dependency_overrides[get_db] = lambda: db
     api.dependency_overrides[notifications.redis_client] = lambda: redis
@@ -115,7 +120,7 @@ async def test_post_uses_channel_stream(client, redis, channel):
 async def test_post_invalid_field_returns_400(client, db, redis, override, field):
     resp = await client.post("/notifications", json=payload(**override))
     assert resp.status_code == 400
-    assert field in [d["field"] for d in resp.json()["detail"]["details"]]
+    assert field in [d["field"] for d in resp.json()["error"]["details"]]
     assert db.added == []
     assert await stream_entries(redis) == []
 
@@ -124,7 +129,7 @@ async def test_post_missing_required_fields_returns_400(client):
     data = {k: v for k, v in payload().items() if k not in ("recipient_id", "body")}
     resp = await client.post("/notifications", json=data)
     assert resp.status_code == 400
-    assert {d["field"] for d in resp.json()["detail"]["details"]} == {"recipient_id", "body"}
+    assert {d["field"] for d in resp.json()["error"]["details"]} == {"recipient_id", "body"}
 
 
 async def test_post_unauthenticated_returns_401(client, db):
@@ -161,6 +166,7 @@ async def test_post_duplicate_with_empty_cache_returns_409_from_db(client, db, r
 async def test_post_redis_down_falls_back_to_db_duplicate_check(db):
     down = fakeredis.FakeAsyncRedis(connected=False, decode_responses=True)
     api = FastAPI()
+    register_exception_handlers(api)
     api.include_router(notifications.router)
     api.dependency_overrides[get_db] = lambda: db
     api.dependency_overrides[notifications.redis_client] = lambda: down
@@ -173,6 +179,7 @@ async def test_post_redis_down_falls_back_to_db_duplicate_check(db):
 async def test_post_redis_down_returns_503_but_keeps_queued_log(db):
     down = fakeredis.FakeAsyncRedis(connected=False, decode_responses=True)
     api = FastAPI()
+    register_exception_handlers(api)
     api.include_router(notifications.router)
     api.dependency_overrides[get_db] = lambda: db
     api.dependency_overrides[notifications.redis_client] = lambda: down
@@ -226,7 +233,7 @@ async def test_post_enabled_preference_is_queued(client, db):
 def seed_template(redis_client, title="안녕 {{name}}", body="{{item}} 도착"):
     template_id = uuid.uuid4()
     return template_id, redis_client.set(
-        f"template:{template_id}", json.dumps({"id": str(template_id), "title": title, "body": body})
+        f"template:{template_id}", json.dumps({"id": str(template_id), "name": "n", "title": title, "body": body})
     )
 
 
@@ -260,10 +267,10 @@ async def test_post_unknown_template_returns_404(client, db):
     assert resp.status_code == 404
 
 
-async def test_get_returns_status_and_history(client, db):
+def make_notification(app_id=APP.id) -> Notification:
     queued = datetime.now(UTC) - timedelta(seconds=3)
     n = Notification(
-        id=uuid.uuid4(), event_id="evt-1", app_id=APP.id, channel="ios", recipient_id="u1", title="t", body="b",
+        id=uuid.uuid4(), event_id="evt-1", app_id=app_id, channel="ios", recipient_id="u1", title="t", body="b",
         template_id=None, status="DELIVERED", retry_count=1, total_duration_ms=900, queued_at=queued,
         delivered_at=queued + timedelta(milliseconds=900), failed_at=None,
     )
@@ -271,8 +278,15 @@ async def test_get_returns_status_and_history(client, db):
         NotificationStatusHistory(status="QUEUED", worker_id=None, changed_at=queued, note=None),
         NotificationStatusHistory(status="DELIVERED", worker_id="w1", changed_at=queued + timedelta(seconds=1), note=None),
     ]
-    db.notification = n
-    resp = await client.get("/notifications/evt-1")
+    return n
+
+
+HEADERS = {"X-App-Key": "key", "X-App-Secret": "secret"}
+
+
+async def test_get_returns_status_and_history(client, db):
+    db.notification = make_notification()
+    resp = await client.get("/notifications/evt-1", headers=HEADERS)
     assert resp.status_code == 200
     body = resp.json()
     assert (body["status"], body["channel"], body["recipient_id"], body["body"]) == ("DELIVERED", "ios", "u1", "b")
@@ -281,5 +295,78 @@ async def test_get_returns_status_and_history(client, db):
 
 
 async def test_get_unknown_event_returns_404(client):
-    resp = await client.get("/notifications/missing")
+    resp = await client.get("/notifications/missing", headers=HEADERS)
     assert resp.status_code == 404
+
+
+async def test_get_other_apps_notification_returns_404(client, db):
+    db.notification = make_notification(app_id=uuid.uuid4())
+    resp = await client.get("/notifications/evt-1", headers=HEADERS)
+    assert resp.status_code == 404
+
+
+@pytest.mark.parametrize("headers", [{}, {"X-App-Key": "key"}, {"X-App-Key": "key", "X-App-Secret": "wrong"}])
+async def test_get_requires_credentials(client, db, headers):
+    db.notification = make_notification()
+    resp = await client.get("/notifications/evt-1", headers=headers)
+    assert resp.status_code == 401
+
+
+async def test_error_body_uses_standard_format(client):
+    resp = await client.post("/notifications", json=payload(channel="push"))
+    error = resp.json()["error"]
+    assert (error["code"], error["details"][0]["field"]) == ("VALIDATION_ERROR", "channel")
+    assert resp.json()["request_id"].startswith("req_")
+
+
+async def test_post_template_lookup_falls_back_to_db_when_redis_down(db):
+    template_id = uuid.uuid4()
+    db.get = AsyncMock(
+        return_value=NotificationTemplate(
+            id=template_id, name="n", title=None, body="{{item}} 도착", placeholders=[], is_deleted=False
+        )
+    )
+    down = fakeredis.FakeAsyncRedis(connected=False, decode_responses=True)
+    sent = []
+
+    async def capture(client, stream, fields):
+        sent.append(fields)
+
+    api = FastAPI()
+    register_exception_handlers(api)
+    api.include_router(notifications.router)
+    api.dependency_overrides[get_db] = lambda: db
+    api.dependency_overrides[notifications.redis_client] = lambda: down
+    data = {k: v for k, v in payload().items() if k not in ("title", "body")}
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(notifications, "xadd_notification", capture)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://test") as c:
+            resp = await c.post(
+                "/notifications",
+                json={**data, "template_id": str(template_id), "template_variables": {"item": "택배"}},
+            )
+    assert resp.status_code == 202
+    assert sent[0]["body"] == "택배 도착"
+
+
+async def test_post_deleted_template_returns_404_when_redis_down(db):
+    db.get = AsyncMock(
+        return_value=NotificationTemplate(id=uuid.uuid4(), name="n", title=None, body="x", placeholders=[], is_deleted=True)
+    )
+    down = fakeredis.FakeAsyncRedis(connected=False, decode_responses=True)
+    api = FastAPI()
+    register_exception_handlers(api)
+    api.include_router(notifications.router)
+    api.dependency_overrides[get_db] = lambda: db
+    api.dependency_overrides[notifications.redis_client] = lambda: down
+    data = {k: v for k, v in payload().items() if k not in ("title", "body")}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://test") as c:
+        resp = await c.post("/notifications", json={**data, "template_id": str(uuid.uuid4())})
+    assert resp.status_code == 404
+
+
+async def test_post_db_error_during_lookup_returns_503(client, db):
+    db.lookup_error = OperationalError("select", {}, Exception("down"))
+    resp = await client.post("/notifications", json=payload())
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "DB_UNAVAILABLE"
