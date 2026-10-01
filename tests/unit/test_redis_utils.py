@@ -1,3 +1,4 @@
+import fakeredis
 
 from app.core import redis as r
 
@@ -69,3 +70,25 @@ async def test_get_redis_returns_singleton_and_close_resets():
     await r.close_redis()
     assert r.get_redis() is not first
     await r.close_redis()
+
+
+async def test_cache_helpers_swallow_redis_errors_with_warning(caplog):
+    down = fakeredis.FakeAsyncRedis(connected=False, decode_responses=True)
+
+    assert await r.get_cache(down, "k") is None
+    await r.set_cache(down, "k", {"a": 1}, 60)
+    await r.invalidate_cache(down, "k")
+
+    assert [rec.getMessage() for rec in caplog.records] == [
+        "캐시 조회에 실패했습니다: key=k",
+        "캐시 저장에 실패했습니다: key=k",
+        "캐시 무효화에 실패했습니다: key=k",
+    ]
+
+
+async def test_invalidate_cache_deletes_key(fake_redis):
+    await fake_redis.set("k", "1")
+
+    await r.invalidate_cache(fake_redis, "k")
+
+    assert await fake_redis.exists("k") == 0
