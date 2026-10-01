@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 import signal
-import socket
 import time
 from datetime import UTC, datetime
 
@@ -31,6 +30,7 @@ MAX_BACKOFF_SECONDS = 32
 SEND_TIMEOUT_SECONDS = 5
 READ_COUNT = 10
 BLOCK_MS = 1000
+RETRY_STREAM_MAX_AGE_SECONDS = 3600
 
 
 def backoff_delay(retry_number: int) -> int:
@@ -50,7 +50,8 @@ class BaseWorker:
     ):
         self.redis = redis_client or get_redis()
         self.session_factory = session_factory
-        self.worker_id = worker_id or f"{self.channel}-{socket.gethostname()}-{os.getpid()}"
+        # 재시작해도 이전 pending을 이어받도록 컨슈머 이름은 고정한다. 인스턴스를 여러 개 띄우면 WORKER_ID로 구분한다.
+        self.worker_id = worker_id or os.environ.get("WORKER_ID") or self.channel
         self.send_timeout = send_timeout
         self.clock = clock
         self.stream = CHANNEL_STREAMS[self.channel]
@@ -85,14 +86,23 @@ class BaseWorker:
         await self._consume(self.stream, CONSUMER_GROUP, ">", block=BLOCK_MS)
 
     async def _consume(self, stream: str, group: str, start_id: str, block: int | None) -> None:
-        result = await self.redis.xreadgroup(
-            group, self.worker_id, {stream: start_id}, count=READ_COUNT, block=block
-        )
-        for _, messages in result or []:
+        # pending("0")은 마지막으로 본 id부터 페이지를 넘겨 읽어, 도래 전 항목이 많아도 뒤의 항목이 굶지 않게 한다.
+        while not self._stop.is_set():
+            result = await self.redis.xreadgroup(
+                group, self.worker_id, {stream: start_id}, count=READ_COUNT, block=block
+            )
+            messages = [m for _, batch in result or [] for m in batch]
             for message_id, fields in messages:
                 if self._stop.is_set():
                     return
+                if fields is None:
+                    # XTRIM으로 본문이 이미 지워진 pending 항목
+                    await xack_message(self.redis, stream, message_id, group)
+                    continue
                 await self.handle_message(stream, group, message_id, fields)
+            if start_id == ">" or not messages:
+                return
+            start_id = messages[-1][0]
 
     async def handle_message(self, stream: str, group: str, message_id: str, fields: dict) -> None:
         if stream == RETRY_STREAM:
@@ -172,6 +182,9 @@ class BaseWorker:
                 RETRY_STREAM,
                 {**fields, "retry_count": retry_count + 1, "next_retry_after": int(next_retry)},
             )
+            # 4개 그룹이 같은 항목을 읽으므로 XDEL 대신 오래된 항목만 시간 기준으로 정리한다.
+            min_id = int((self.clock() - RETRY_STREAM_MAX_AGE_SECONDS) * 1000)
+            await self.redis.xtrim(RETRY_STREAM, minid=min_id, approximate=False)
 
     async def _record_failure(
         self, db: AsyncSession, event_id: str, reason: str, retry_count: int, next_retry: float | None
