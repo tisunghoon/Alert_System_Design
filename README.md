@@ -9,6 +9,8 @@ cp .env.example .env
 docker compose up --build
 ```
 
+DB 마이그레이션은 `alembic upgrade head`로 적용합니다. `DATABASE_URL`은 `.env`에서 읽습니다.
+
 워커(`app.workers.<channel>_worker`)는 구현 PR이 병합되기 전까지 기동되지 않습니다.
 
 로컬 테스트:
