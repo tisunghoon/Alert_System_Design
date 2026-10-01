@@ -53,7 +53,9 @@ class Notification(Base):
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), Computed("queued_at + INTERVAL '30 days'", persisted=True)
+        DateTime(timezone=True), Computed(
+            "((queued_at AT TIME ZONE 'UTC') + INTERVAL '30 days') AT TIME ZONE 'UTC'", persisted=True
+        )
     )
 
     history: Mapped[list["NotificationStatusHistory"]] = relationship(

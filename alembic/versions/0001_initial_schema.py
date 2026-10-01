@@ -86,7 +86,7 @@ CREATE TABLE notifications (
     delivered_at    TIMESTAMPTZ,
     failed_at       TIMESTAMPTZ,
     expires_at      TIMESTAMPTZ                    -- 30일 보존 기준
-        GENERATED ALWAYS AS (queued_at + INTERVAL '30 days') STORED
+        GENERATED ALWAYS AS (((queued_at AT TIME ZONE 'UTC') + INTERVAL '30 days') AT TIME ZONE 'UTC') STORED
 )
     """,
     """
