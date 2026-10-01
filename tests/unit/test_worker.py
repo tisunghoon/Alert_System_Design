@@ -7,6 +7,8 @@ from unittest.mock import MagicMock
 import fakeredis
 import pytest
 
+from app.workers import base_worker
+
 from app.core.redis import CONSUMER_GROUP, DEAD_LETTER_STREAM, IOS_STREAM, RETRY_STREAM, xadd_notification
 from app.mocks import config_store
 from app.mocks.third_party_mock import MOCKS
@@ -22,9 +24,10 @@ NOW = 1_000_000.0
 
 
 class FakeDB:
-    def __init__(self, notification, history):
+    def __init__(self, notification, history, events):
         self.notification = notification
         self.history = history
+        self.events = events
         self.commits = 0
 
     async def execute(self, _stmt):
@@ -43,12 +46,14 @@ class FakeDB:
 
     async def commit(self):
         self.commits += 1
+        self.events.append("commit")
 
 
 class FakeSessions:
     def __init__(self, notification):
         self.notification = notification
         self.history = []
+        self.events = []
         self.fail = False
 
     def __call__(self):
@@ -56,7 +61,7 @@ class FakeSessions:
         async def session():
             if self.fail:
                 raise ConnectionError("db down")
-            yield FakeDB(self.notification, self.history)
+            yield FakeDB(self.notification, self.history, self.events)
 
         return session()
 
@@ -302,3 +307,113 @@ def test_channel_workers_use_their_own_stream(redis_client, cls, channel, stream
 @pytest.mark.parametrize(("n", "delay"), [(1, 1), (2, 2), (3, 4), (6, 32), (9, 32)])
 def test_backoff_delay(n, delay):
     assert backoff_delay(n) == delay
+
+
+@pytest.fixture
+def ordered_events(monkeypatch, sessions):
+    original_ack = base_worker.xack_message
+    original_xadd = base_worker.xadd_notification
+
+    async def recording_ack(*args, **kwargs):
+        sessions.events.append("xack")
+        return await original_ack(*args, **kwargs)
+
+    async def recording_xadd(client, stream, fields):
+        sessions.events.append(f"xadd:{stream}")
+        return await original_xadd(client, stream, fields)
+
+    monkeypatch.setattr(base_worker, "xack_message", recording_ack)
+    monkeypatch.setattr(base_worker, "xadd_notification", recording_xadd)
+    return sessions.events
+
+
+async def test_xack_happens_after_delivered_commit(worker, redis_client, ordered_events):
+    await xadd_notification(redis_client, IOS_STREAM, message())
+    ordered_events.clear()
+
+    await worker.poll_once()
+
+    assert ordered_events[-2:] == ["commit", "xack"]
+    assert ordered_events.count("xack") == 1
+
+
+async def test_xack_happens_after_retry_enqueue_and_commit(worker, redis_client, ordered_events):
+    await config_store.save_config(redis_client, "ios", success_rate=0)
+    await xadd_notification(redis_client, IOS_STREAM, message())
+    ordered_events.clear()
+
+    await worker.poll_once()
+
+    assert ordered_events[-3:] == ["commit", f"xadd:{RETRY_STREAM}", "xack"]
+
+
+async def test_xack_happens_after_dead_letter_commit(worker, redis_client, ordered_events):
+    await config_store.save_config(redis_client, "ios", success_rate=0)
+    await xadd_notification(redis_client, IOS_STREAM, message(retry_count=3))
+    ordered_events.clear()
+
+    await worker.poll_once()
+
+    assert ordered_events[-3:] == ["commit", f"xadd:{DEAD_LETTER_STREAM}", "xack"]
+
+
+def test_default_consumer_name_is_stable_per_channel(redis_client, monkeypatch):
+    monkeypatch.delenv("WORKER_ID", raising=False)
+    assert IOSWorker(redis_client=redis_client).worker_id == "ios"
+    assert IOSWorker(redis_client=redis_client).worker_id == IOSWorker(redis_client=redis_client).worker_id
+
+    monkeypatch.setenv("WORKER_ID", "ios-2")
+    assert IOSWorker(redis_client=redis_client).worker_id == "ios-2"
+
+
+async def test_restarted_worker_picks_up_pending_of_previous_run(redis_client, sessions, monkeypatch):
+    monkeypatch.delenv("WORKER_ID", raising=False)
+    first = IOSWorker(redis_client=redis_client, session_factory=sessions)
+    await first.setup()
+    await xadd_notification(redis_client, IOS_STREAM, message())
+    # 처리 도중 프로세스가 죽은 상황: 읽기만 하고 ack하지 않는다.
+    await redis_client.xreadgroup(CONSUMER_GROUP, first.worker_id, {IOS_STREAM: ">"}, count=10)
+
+    restarted = IOSWorker(redis_client=redis_client, session_factory=sessions)
+    await restarted.poll_once()
+
+    assert sessions.notification.status == "DELIVERED"
+    assert await pending_count(redis_client, IOS_STREAM) == 0
+
+
+async def test_failure_trims_old_retry_entries_only(worker, redis_client, clock):
+    await config_store.save_config(redis_client, "ios", success_rate=0)
+    await redis_client.xadd(RETRY_STREAM, {"event_id": "old", "channel": "sms"}, id="1-0")
+    await xadd_notification(redis_client, IOS_STREAM, message())
+
+    await worker.poll_once()
+
+    events = [fields["event_id"] for _, fields in await redis_client.xrange(RETRY_STREAM)]
+    assert events == [EVENT_ID]
+
+
+async def test_trimmed_pending_entry_is_acked(worker, redis_client):
+    await xadd_notification(redis_client, RETRY_STREAM, message(1, next_retry_after=int(NOW) + 100))
+    await worker.poll_once()
+    assert await pending_count(redis_client, RETRY_STREAM, worker.retry_group) == 1
+
+    await redis_client.xtrim(RETRY_STREAM, maxlen=0)
+    await worker.poll_once()
+
+    assert await pending_count(redis_client, RETRY_STREAM, worker.retry_group) == 0
+
+
+async def test_due_retry_is_not_starved_by_many_not_due(worker, redis_client, sessions):
+    for i in range(12):
+        await xadd_notification(
+            redis_client,
+            RETRY_STREAM,
+            {**message(1, next_retry_after=int(NOW) + 1000), "event_id": f"later-{i}"},
+        )
+    await xadd_notification(redis_client, RETRY_STREAM, message(1, next_retry_after=int(NOW)))
+
+    await worker.poll_once()
+    await worker.poll_once()
+
+    assert sessions.notification.status == "DELIVERED"
+    assert await pending_count(redis_client, RETRY_STREAM, worker.retry_group) == 12
