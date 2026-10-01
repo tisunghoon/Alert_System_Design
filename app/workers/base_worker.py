@@ -19,6 +19,7 @@ from app.core.redis import (
     init_consumer_group,
     xack_message,
     xadd_notification,
+    xdel_message,
 )
 from app.mocks.config_store import send_with_shared_state
 from app.services.notification_log import get_by_event_id, set_final_duration, update_status
@@ -123,6 +124,10 @@ class BaseWorker:
         if failure is not None:
             await self._retry_or_dead_letter(fields, failure)
         await xack_message(self.redis, stream, message_id, group)
+        if stream == self.stream:
+            # 채널 Stream은 그룹이 하나뿐이라 ack 뒤에 지워도 되고, 지워야 모니터링의 적재 수에서 빠진다.
+            # retry_stream은 채널별 그룹이 함께 읽으므로 지우지 않는다.
+            await xdel_message(self.redis, stream, message_id)
 
     async def _attempt(self, fields: dict) -> str | None:
         """성공하거나 건너뛰면 None, 실패하면 실패 사유를 돌려준다."""
