@@ -61,6 +61,7 @@ async def get_template(
 
     template = {
         "id": str(row.id),
+        "name": row.name,
         "title": row.title,
         "body": row.body,
         "placeholders": row.placeholders,
