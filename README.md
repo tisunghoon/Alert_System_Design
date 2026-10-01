@@ -9,7 +9,9 @@ cp .env.example .env
 docker compose up --build
 ```
 
-DB 마이그레이션은 `alembic upgrade head`로 적용합니다. `DATABASE_URL`은 `.env`에서 읽습니다.
+`docker compose up`은 postgres가 준비되면 `migrate` 서비스가 `alembic upgrade head`를 실행하고, 이어서 `seed` 서비스가 개발용 앱을 등록한 뒤 서버와 워커를 기동합니다. 로컬에서 직접 적용하려면 `alembic upgrade head`를 실행합니다(`DATABASE_URL`은 `.env`에서 읽습니다).
+
+개발용 앱은 `.env`의 `SEED_APP_KEY`/`SEED_APP_SECRET`(기본값 `dev-app-key`/`dev-app-secret`)으로 만들며, 이미 있으면 건드리지 않습니다. 로컬 개발 전용 값이므로 운영에서는 사용하지 않습니다.
 
 워커(`app.workers.<channel>_worker`)는 구현 PR이 병합되기 전까지 기동되지 않습니다.
 
