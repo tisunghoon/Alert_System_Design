@@ -7,7 +7,7 @@ router = APIRouter(tags=["dead-letter"])
 
 @router.get("/dead-letter")
 async def list_dead_letters(limit: int = Query(100, ge=1, le=1000)):
-    messages = await get_redis().xrange(DEAD_LETTER_STREAM, count=limit)
+    messages = await get_redis().xrevrange(DEAD_LETTER_STREAM, count=limit)
     return {
         "items": [
             {

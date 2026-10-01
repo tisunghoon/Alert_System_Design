@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from app.core.redis import get_redis
 from app.mocks import config_store
@@ -9,8 +9,8 @@ router = APIRouter(prefix="/mocks", tags=["mocks"])
 
 
 class MockConfig(BaseModel):
-    success_rate: int | None = Field(None, ge=0, le=100)
-    delay_ms: int | None = Field(None, ge=0, le=30_000)
+    success_rate: StrictInt | None = Field(None, ge=0, le=100)
+    delay_ms: StrictInt | None = Field(None, ge=0, le=30_000)
 
 
 def _require_channel(channel: str) -> None:

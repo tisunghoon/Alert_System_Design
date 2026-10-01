@@ -63,7 +63,17 @@ async def test_config_update_and_read_back(http, redis_client):
 
 
 @pytest.mark.parametrize(
-    "body", [{"success_rate": 101}, {"success_rate": -1}, {"delay_ms": 30001}, {"delay_ms": -1}]
+    "body",
+    [
+        {"success_rate": 101},
+        {"success_rate": -1},
+        {"delay_ms": 30001},
+        {"delay_ms": -1},
+        {"success_rate": True},
+        {"success_rate": 50.0},
+        {"delay_ms": False},
+        {"delay_ms": 10.0},
+    ],
 )
 async def test_config_rejects_out_of_range(http, body):
     assert (await http.put("/mocks/sms/config", json=body)).status_code == 400
@@ -83,3 +93,10 @@ async def test_records_and_reset(http, redis_client):
     assert (await http.post("/mocks/reset")).status_code == 200
     assert (await http.get("/mocks/email/records")).json()["count"] == 0
     assert await config_store.load_config(redis_client, "email") == (100, 0)
+
+
+async def test_dead_letter_returns_latest_failure_first(http, redis_client):
+    for n in ("n1", "n2", "n3"):
+        await redis_client.xadd("dead_letter_stream", {"notification_id": n})
+    ids = [item["notification_id"] for item in (await http.get("/dead-letter")).json()["items"]]
+    assert ids == ["n3", "n2", "n1"]
