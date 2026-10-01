@@ -50,7 +50,7 @@ async def register_device(
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        raise HTTPException(409, "이미 등록된 단말입니다.")
+        raise HTTPException(409, "이미 등록된 단말입니다.") from None
     await delete_cache(redis, _cache_key(user_id))
     return _to_dict(device)
 

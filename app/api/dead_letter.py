@@ -11,7 +11,7 @@ async def list_dead_letters(limit: int = Query(100, ge=1, le=1000)):
     return {
         "items": [
             {
-                "notification_id": fields.get("notification_id") or fields.get("event_id"),
+                "notification_id": fields.get("notification_id"),
                 "failed_at": fields.get("failed_at"),
                 "failure_reason": fields.get("failure_reason"),
                 "retry_count": int(fields.get("retry_count") or 0),

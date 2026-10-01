@@ -25,7 +25,7 @@ async def _commit(db: AsyncSession) -> None:
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        raise HTTPException(409, "같은 이름의 템플릿이 이미 존재합니다.")
+        raise HTTPException(409, "같은 이름의 템플릿이 이미 존재합니다.") from None
 
 
 async def _active_template(db: AsyncSession, template_id: uuid.UUID) -> NotificationTemplate:
@@ -63,7 +63,7 @@ async def read_template(
     try:
         return await get_template(db, redis, template_id)
     except TemplateNotFoundError:
-        raise _not_found(template_id)
+        raise _not_found(template_id) from None
 
 
 @router.put("/{template_id}", response_model=TemplateOut)
