@@ -5,18 +5,16 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import fakeredis
-import httpx
 import pytest
-from fastapi import FastAPI
 from redis.exceptions import RedisError
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.api import notifications
 from app.core.database import get_db
 from app.core.redis import CHANNEL_STREAMS, get_redis
-from app.core.errors import register_exception_handlers
 from app.models import App, Notification, NotificationStatusHistory, NotificationTemplate
 from app.services import rate_limiter
+from tests.support.http import make_client
 
 APP = App(id=uuid.uuid4(), app_key="key", app_secret="secret", name="svc", is_active=True)
 CREDS = {"app_key": "key", "app_secret": "secret"}
@@ -57,12 +55,7 @@ def db():
 
 @pytest.fixture
 def client(db, fake_redis):
-    api = FastAPI()
-    register_exception_handlers(api)
-    api.include_router(notifications.router)
-    api.dependency_overrides[get_db] = lambda: db
-    api.dependency_overrides[get_redis] = lambda: fake_redis
-    return httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://test")
+    return make_client(notifications.router, overrides={get_db: lambda: db, get_redis: lambda: fake_redis})
 
 
 def payload(**overrides):
@@ -160,25 +153,17 @@ async def test_post_duplicate_with_empty_cache_returns_409_from_db(client, db, f
 
 async def test_post_redis_down_falls_back_to_db_duplicate_check(db):
     down = fakeredis.FakeAsyncRedis(connected=False, decode_responses=True)
-    api = FastAPI()
-    register_exception_handlers(api)
-    api.include_router(notifications.router)
-    api.dependency_overrides[get_db] = lambda: db
-    api.dependency_overrides[get_redis] = lambda: down
+    client = make_client(notifications.router, overrides={get_db: lambda: db, get_redis: lambda: down})
     db.delivered_exists = True
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://test") as c:
+    async with client as c:
         resp = await c.post("/notifications", json=payload())
     assert resp.status_code == 409
 
 
 async def test_post_redis_down_returns_503_but_keeps_queued_log(db):
     down = fakeredis.FakeAsyncRedis(connected=False, decode_responses=True)
-    api = FastAPI()
-    register_exception_handlers(api)
-    api.include_router(notifications.router)
-    api.dependency_overrides[get_db] = lambda: db
-    api.dependency_overrides[get_redis] = lambda: down
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://test") as c:
+    client = make_client(notifications.router, overrides={get_db: lambda: db, get_redis: lambda: down})
+    async with client as c:
         resp = await c.post("/notifications", json=payload())
     assert resp.status_code == 503
     assert [o for o in db.added if isinstance(o, Notification)]
@@ -327,15 +312,11 @@ async def test_post_template_lookup_falls_back_to_db_when_redis_down(db):
     async def capture(client, stream, fields):
         sent.append(fields)
 
-    api = FastAPI()
-    register_exception_handlers(api)
-    api.include_router(notifications.router)
-    api.dependency_overrides[get_db] = lambda: db
-    api.dependency_overrides[get_redis] = lambda: down
+    client = make_client(notifications.router, overrides={get_db: lambda: db, get_redis: lambda: down})
     data = {k: v for k, v in payload().items() if k not in ("title", "body")}
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(notifications, "xadd_notification", capture)
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://test") as c:
+        async with client as c:
             resp = await c.post(
                 "/notifications",
                 json={**data, "template_id": str(template_id), "template_variables": {"item": "택배"}},
@@ -349,13 +330,9 @@ async def test_post_deleted_template_returns_404_when_redis_down(db):
         return_value=NotificationTemplate(id=uuid.uuid4(), name="n", title=None, body="x", placeholders=[], is_deleted=True)
     )
     down = fakeredis.FakeAsyncRedis(connected=False, decode_responses=True)
-    api = FastAPI()
-    register_exception_handlers(api)
-    api.include_router(notifications.router)
-    api.dependency_overrides[get_db] = lambda: db
-    api.dependency_overrides[get_redis] = lambda: down
+    client = make_client(notifications.router, overrides={get_db: lambda: db, get_redis: lambda: down})
     data = {k: v for k, v in payload().items() if k not in ("title", "body")}
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://test") as c:
+    async with client as c:
         resp = await c.post("/notifications", json={**data, "template_id": str(uuid.uuid4())})
     assert resp.status_code == 404
 
