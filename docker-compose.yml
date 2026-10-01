@@ -11,8 +11,34 @@ x-app: &app
       condition: service_healthy
     redis:
       condition: service_healthy
+    seed:
+      condition: service_completed_successfully
 
 services:
+  migrate:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://alert:alert@postgres:5432/alert
+    command: alembic upgrade head
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  seed:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://alert:alert@postgres:5432/alert
+    command: python scripts/seed_app.py
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   alert_server:
     <<: *app
     ports:
