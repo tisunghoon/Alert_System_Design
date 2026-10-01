@@ -22,6 +22,11 @@ def make_app() -> FastAPI:
     async def limited():
         raise HTTPException(429, "요청 한도를 초과했습니다.", headers={"Retry-After": "30"})
 
+    @app.get("/structured")
+    async def structured():
+        detail = {"code": "DUPLICATE_EVENT", "message": "중복", "details": [{"field": "event_id", "reason": "중복"}]}
+        raise HTTPException(409, detail)
+
     @app.get("/unauthorized")
     async def unauthorized():
         raise HTTPException(401, "인증에 실패했습니다.")
@@ -70,3 +75,14 @@ async def test_unknown_route_uses_standard_format():
 
     assert res.status_code == 404
     assert res.json()["error"]["code"] == "NOT_FOUND"
+
+
+async def test_dict_detail_sets_code_message_and_details():
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=make_app()), base_url="http://test") as c:
+        resp = await c.get("/structured")
+    assert resp.status_code == 409
+    assert resp.json()["error"] == {
+        "code": "DUPLICATE_EVENT",
+        "message": "중복",
+        "details": [{"field": "event_id", "reason": "중복"}],
+    }

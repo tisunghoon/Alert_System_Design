@@ -20,12 +20,13 @@ def error_response(
     message: str,
     details: list[dict] | None = None,
     headers: dict[str, str] | None = None,
+    code: str | None = None,
 ) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
         content={
             "error": {
-                "code": ERROR_CODES.get(status_code, "HTTP_ERROR"),
+                "code": code or ERROR_CODES.get(status_code, "HTTP_ERROR"),
                 "message": message,
                 "details": details or [],
             },
@@ -36,6 +37,15 @@ def error_response(
 
 
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    if isinstance(exc.detail, dict):
+        # detail에 code, message, details를 담아 던지면 그대로 응답 형식에 반영한다.
+        return error_response(
+            exc.status_code,
+            exc.detail["message"],
+            exc.detail.get("details"),
+            exc.headers,
+            exc.detail.get("code"),
+        )
     return error_response(exc.status_code, str(exc.detail), headers=exc.headers)
 
 
