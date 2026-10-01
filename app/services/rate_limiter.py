@@ -20,9 +20,24 @@ def _config_key(user_id: str, channel: str) -> str:
     return f"rate_limit_cfg:{user_id}:{channel}"
 
 
+def _parse_limit(configured: str | None, user_id: str, channel: str) -> int:
+    if configured is None:
+        return settings.RATE_LIMIT_DEFAULT
+    try:
+        return int(configured)
+    except ValueError:
+        logger.warning(
+            "잘못된 Rate Limit 설정이라 기본값을 사용합니다: user=%s channel=%s value=%r",
+            user_id, channel, configured,
+        )
+        return settings.RATE_LIMIT_DEFAULT
+
+
 async def set_user_limit(
     user_id: str, channel: str, limit: int, client: aioredis.Redis | None = None
 ) -> None:
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        raise ValueError("limit은 1 이상의 정수여야 합니다")
     client = client or get_redis()
     await client.set(_config_key(user_id, channel), limit)
 
@@ -37,7 +52,7 @@ async def check_rate_limit(
     client = client or get_redis()
     try:
         configured = await client.get(_config_key(user_id, channel))
-        limit = int(configured) if configured is not None else settings.RATE_LIMIT_DEFAULT
+        limit = _parse_limit(configured, user_id, channel)
         count = await incr_with_ttl(client, _counter_key(user_id, channel), WINDOW_SECONDS)
     except RedisError:
         logger.warning("Redis 응답 불가로 Rate Limit 검사를 건너뜁니다: user=%s channel=%s", user_id, channel)
