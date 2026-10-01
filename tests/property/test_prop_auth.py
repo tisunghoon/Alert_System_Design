@@ -10,6 +10,7 @@ from hypothesis import strategies as st
 
 from app.api import notifications
 from app.core.database import get_db
+from app.core.redis import get_redis
 from app.core.errors import register_exception_handlers
 from app.models import App
 
@@ -41,7 +42,7 @@ async def post(body: dict) -> httpx.Response:
     api.include_router(notifications.router)
     api.dependency_overrides[get_db] = lambda: FakeDB()
     redis = fakeredis.FakeAsyncRedis(decode_responses=True)
-    api.dependency_overrides[notifications.redis_client] = lambda: redis
+    api.dependency_overrides[get_redis] = lambda: redis
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://test") as client:
         return await client.post("/notifications", json=body)
 

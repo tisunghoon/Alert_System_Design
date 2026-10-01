@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.api import notifications
 from app.core.database import get_db
-from app.core.redis import CHANNEL_STREAMS
+from app.core.redis import CHANNEL_STREAMS, get_redis
 from app.core.errors import register_exception_handlers
 from app.models import App, Notification, NotificationStatusHistory, NotificationTemplate
 from app.services import rate_limiter
@@ -61,7 +61,7 @@ def client(db, fake_redis):
     register_exception_handlers(api)
     api.include_router(notifications.router)
     api.dependency_overrides[get_db] = lambda: db
-    api.dependency_overrides[notifications.redis_client] = lambda: fake_redis
+    api.dependency_overrides[get_redis] = lambda: fake_redis
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://test")
 
 
@@ -164,7 +164,7 @@ async def test_post_redis_down_falls_back_to_db_duplicate_check(db):
     register_exception_handlers(api)
     api.include_router(notifications.router)
     api.dependency_overrides[get_db] = lambda: db
-    api.dependency_overrides[notifications.redis_client] = lambda: down
+    api.dependency_overrides[get_redis] = lambda: down
     db.delivered_exists = True
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://test") as c:
         resp = await c.post("/notifications", json=payload())
@@ -177,7 +177,7 @@ async def test_post_redis_down_returns_503_but_keeps_queued_log(db):
     register_exception_handlers(api)
     api.include_router(notifications.router)
     api.dependency_overrides[get_db] = lambda: db
-    api.dependency_overrides[notifications.redis_client] = lambda: down
+    api.dependency_overrides[get_redis] = lambda: down
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://test") as c:
         resp = await c.post("/notifications", json=payload())
     assert resp.status_code == 503
@@ -331,7 +331,7 @@ async def test_post_template_lookup_falls_back_to_db_when_redis_down(db):
     register_exception_handlers(api)
     api.include_router(notifications.router)
     api.dependency_overrides[get_db] = lambda: db
-    api.dependency_overrides[notifications.redis_client] = lambda: down
+    api.dependency_overrides[get_redis] = lambda: down
     data = {k: v for k, v in payload().items() if k not in ("title", "body")}
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(notifications, "xadd_notification", capture)
@@ -353,7 +353,7 @@ async def test_post_deleted_template_returns_404_when_redis_down(db):
     register_exception_handlers(api)
     api.include_router(notifications.router)
     api.dependency_overrides[get_db] = lambda: db
-    api.dependency_overrides[notifications.redis_client] = lambda: down
+    api.dependency_overrides[get_redis] = lambda: down
     data = {k: v for k, v in payload().items() if k not in ("title", "body")}
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://test") as c:
         resp = await c.post("/notifications", json={**data, "template_id": str(uuid.uuid4())})

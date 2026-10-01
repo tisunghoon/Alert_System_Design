@@ -34,10 +34,6 @@ router = APIRouter()
 QUEUE_TIMEOUT_SECONDS = 3
 
 
-def redis_client() -> aioredis.Redis:
-    return get_redis()
-
-
 def _error(status: int, code: str, message: str, details: list[dict] | None = None, **kwargs) -> HTTPException:
     detail = {"code": code, "message": message, "details": details or []}
     return HTTPException(status_code=status, detail=detail, **kwargs)
@@ -126,7 +122,7 @@ async def create_notification(
     response: Response,
     app: App = Depends(get_current_app),
     db: AsyncSession = Depends(get_db),
-    client: aioredis.Redis = Depends(redis_client),
+    client: aioredis.Redis = Depends(get_redis),
 ):
     payload = await _json_object(request)
 

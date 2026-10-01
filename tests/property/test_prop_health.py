@@ -6,6 +6,7 @@ from hypothesis import strategies as st
 
 from app.api import monitoring
 from app.core.database import get_db
+from app.core.redis import get_redis
 from app.main import app
 
 
@@ -20,10 +21,10 @@ async def test_health_reports_all_components(db_ok, cache_ok, mq_ok):
     async def check_db(_db):
         await check(db_ok)
 
-    async def check_cache():
+    async def check_cache(_client):
         await check(cache_ok)
 
-    async def check_queue():
+    async def check_queue(_client):
         await check(mq_ok)
 
     with (
@@ -32,6 +33,7 @@ async def test_health_reports_all_components(db_ok, cache_ok, mq_ok):
         patch.object(monitoring, "_check_queue", new=check_queue),
     ):
         app.dependency_overrides[get_db] = lambda: AsyncMock()
+        app.dependency_overrides[get_redis] = lambda: AsyncMock()
         try:
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"

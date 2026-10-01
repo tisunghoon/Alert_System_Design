@@ -47,10 +47,7 @@ async def test_stats_range_over_30_days_is_rejected(http):
     assert (await http.get("/monitoring/stats", params=params)).status_code == 400
 
 
-async def test_health_and_queues_with_real_services(http, monkeypatch, redis_client):
-    from app.api import monitoring
-
-    monkeypatch.setattr(monitoring, "get_redis", lambda: redis_client)
+async def test_health_and_queues_with_real_services(http, redis_client):
     await redis_client.xadd("sms_stream", {"a": "1"})
 
     resp = await http.get("/health")

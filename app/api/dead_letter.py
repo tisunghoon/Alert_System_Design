@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Query
+import redis.asyncio as aioredis
+from fastapi import APIRouter, Depends, Query
 
 from app.core.redis import DEAD_LETTER_STREAM, get_redis
 
@@ -6,8 +7,10 @@ router = APIRouter(tags=["dead-letter"])
 
 
 @router.get("/dead-letter")
-async def list_dead_letters(limit: int = Query(100, ge=1, le=1000)):
-    messages = await get_redis().xrevrange(DEAD_LETTER_STREAM, count=limit)
+async def list_dead_letters(
+    limit: int = Query(100, ge=1, le=1000), client: aioredis.Redis = Depends(get_redis)
+):
+    messages = await client.xrevrange(DEAD_LETTER_STREAM, count=limit)
     return {
         "items": [
             {

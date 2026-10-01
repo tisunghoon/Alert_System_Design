@@ -1,20 +1,16 @@
-from unittest.mock import patch
-
 import httpx
 import pytest
 
-from app.api import dead_letter, mocks
+from app.core.redis import get_redis
 from app.main import app
 from app.mocks import config_store
 
 
 @pytest.fixture
 async def redis_client(fake_redis):
-    with (
-        patch.object(mocks, "get_redis", return_value=fake_redis),
-        patch.object(dead_letter, "get_redis", return_value=fake_redis),
-    ):
-        yield fake_redis
+    app.dependency_overrides[get_redis] = lambda: fake_redis
+    yield fake_redis
+    app.dependency_overrides.pop(get_redis, None)
 
 
 @pytest.fixture

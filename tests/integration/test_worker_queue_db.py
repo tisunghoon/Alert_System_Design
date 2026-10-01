@@ -1,6 +1,5 @@
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.api import monitoring
 from app.core.redis import xadd_notification
 from app.mocks import config_store
 from app.services import notification_log as log
@@ -21,8 +20,7 @@ async def queue_sizes(http):
     return {q["channel"]: q["size"] for q in (await http.get("/monitoring/queues")).json()["queues"]}
 
 
-async def test_queue_size_drops_to_zero_after_worker_processes(http, db, engine, app_row, redis_client, monkeypatch):
-    monkeypatch.setattr(monitoring, "get_redis", lambda: redis_client)
+async def test_queue_size_drops_to_zero_after_worker_processes(http, db, engine, app_row, redis_client):
     worker = SMSWorker(redis_client=redis_client, session_factory=async_sessionmaker(engine, expire_on_commit=False))
     await worker.setup()
     await enqueue(db, redis_client, app_row, "evt-q1")
@@ -38,9 +36,8 @@ async def test_queue_size_drops_to_zero_after_worker_processes(http, db, engine,
 
 
 async def test_failed_message_leaves_channel_queue_but_stays_in_retry_stream(
-    http, db, engine, app_row, redis_client, monkeypatch
+    http, db, engine, app_row, redis_client
 ):
-    monkeypatch.setattr(monitoring, "get_redis", lambda: redis_client)
     await config_store.save_config(redis_client, "sms", success_rate=0)
     worker = SMSWorker(redis_client=redis_client, session_factory=async_sessionmaker(engine, expire_on_commit=False))
     await worker.setup()

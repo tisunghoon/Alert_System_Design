@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -10,13 +10,15 @@ from sqlalchemy.dialects import postgresql
 from app.api import monitoring
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.redis import get_redis
 from app.main import app
 
 
 @pytest.fixture
 async def redis_client(fake_redis):
-    with patch.object(monitoring, "get_redis", return_value=fake_redis):
-        yield fake_redis
+    app.dependency_overrides[get_redis] = lambda: fake_redis
+    yield fake_redis
+    app.dependency_overrides.pop(get_redis, None)
 
 
 @pytest.fixture

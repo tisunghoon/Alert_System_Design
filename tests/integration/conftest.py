@@ -102,22 +102,12 @@ async def http(engine, redis_client):
                 await session.rollback()
                 raise
 
-    from unittest.mock import patch
-
-    from app.api import dead_letter, mocks, monitoring, notifications
-
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_redis] = lambda: redis_client
-    app.dependency_overrides[notifications.redis_client] = lambda: redis_client
-    with (
-        patch.object(mocks, "get_redis", return_value=redis_client),
-        patch.object(dead_letter, "get_redis", return_value=redis_client),
-        patch.object(monitoring, "get_redis", return_value=redis_client),
-    ):
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            yield client
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        yield client
     app.dependency_overrides.clear()
 
 
